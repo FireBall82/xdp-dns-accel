@@ -171,7 +171,7 @@ public:
         uint32_t idx = hash & mask;
 
         for (size_t probe = 0; probe < 16; ++probe) {
-            uint32_t expected_hash = 0;
+            
             uint32_t existing_hash = buckets()[idx].domain_hash.load(std::memory_order_relaxed);
 
             if (existing_hash == 0 || existing_hash == hash) {
