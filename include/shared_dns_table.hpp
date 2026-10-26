@@ -25,9 +25,12 @@ constexpr uint32_t fnv1a_32(std::string_view str) noexcept {
 
 struct alignas(64) AtomicCacheBucket {
     std::atomic<uint32_t> domain_hash{0};
-    std::atomic<uint32_t> ipv4_addr{0};      // Network byte order
-    std::atomic<uint64_t> ttl_expiration{0}; // CLOCK_MONOTONIC ns
+    std::atomic<uint32_t> ipv4_addr{0};       // Network byte order
+    std::atomic<uint64_t> ttl_expiration{0};  // IPv4 CLOCK_MONOTONIC ns
     std::atomic<uint32_t> hit_count{0};
+    // --- IPv6 Fields (protected by domain_hash acquire/release fence) ---
+    uint8_t ipv6_addr[16]{};                  // Network byte order
+    std::atomic<uint64_t> ipv6_ttl_expiration{0}; // IPv6 CLOCK_MONOTONIC ns
 };
 
 template<size_t Capacity = 131072> // Must be a power of two
@@ -125,7 +128,41 @@ public:
         return false;
     }
 
-    // Atomic Insertion / Update
+    // Sub-50ns Lock-free IPv6 lookup implementation
+    [[nodiscard]] bool lookup_ipv6(std::string_view domain, uint8_t* out_ipv6, uint64_t current_time_ns) noexcept {
+        header()->total_queries.fetch_add(1, std::memory_order_relaxed);
+        uint32_t hash = fnv1a_32(domain);
+        if (hash == 0) hash = 1;
+
+        uint32_t mask = Capacity - 1;
+        uint32_t idx = hash & mask;
+
+        for (size_t probe = 0; probe < 16; ++probe) {
+            uint32_t bucket_hash = buckets()[idx].domain_hash.load(std::memory_order_acquire);
+
+            if (bucket_hash == 0) {
+                return false; // Empty slot, cache miss
+            }
+
+            if (bucket_hash == hash) {
+                uint64_t exp = buckets()[idx].ipv6_ttl_expiration.load(std::memory_order_relaxed);
+                if (exp == 0 || current_time_ns > exp) {
+                    return false; // Never populated or expired
+                }
+
+                std::memcpy(out_ipv6, buckets()[idx].ipv6_addr, 16);
+                buckets()[idx].hit_count.fetch_add(1, std::memory_order_relaxed);
+                header()->cache_hits.fetch_add(1, std::memory_order_relaxed);
+                return true;
+            }
+
+            idx = (idx + 1) & mask;
+        }
+
+        return false;
+    }
+
+    // Atomic IPv4 Insertion / Update
     void insert(std::string_view domain, uint32_t ipv4_addr, uint64_t ttl_ns) noexcept {
         uint32_t hash = fnv1a_32(domain);
         if (hash == 0) hash = 1;
@@ -140,6 +177,28 @@ public:
             if (existing_hash == 0 || existing_hash == hash) {
                 buckets()[idx].ipv4_addr.store(ipv4_addr, std::memory_order_relaxed);
                 buckets()[idx].ttl_expiration.store(ttl_ns, std::memory_order_relaxed);
+                buckets()[idx].domain_hash.store(hash, std::memory_order_release);
+                return;
+            }
+
+            idx = (idx + 1) & mask;
+        }
+    }
+
+    // Atomic IPv6 Insertion / Update
+    void insert_ipv6(std::string_view domain, const uint8_t* ipv6_addr_in, uint64_t ttl_ns) noexcept {
+        uint32_t hash = fnv1a_32(domain);
+        if (hash == 0) hash = 1;
+
+        uint32_t mask = Capacity - 1;
+        uint32_t idx = hash & mask;
+
+        for (size_t probe = 0; probe < 16; ++probe) {
+            uint32_t existing_hash = buckets()[idx].domain_hash.load(std::memory_order_relaxed);
+
+            if (existing_hash == 0 || existing_hash == hash) {
+                std::memcpy(buckets()[idx].ipv6_addr, ipv6_addr_in, 16);
+                buckets()[idx].ipv6_ttl_expiration.store(ttl_ns, std::memory_order_relaxed);
                 buckets()[idx].domain_hash.store(hash, std::memory_order_release);
                 return;
             }

@@ -23,6 +23,8 @@ struct dns_cache_entry {
     __u32 ipv4_addr;
     __u64 ttl_expiration;
     __u32 hit_count;
+    __u8  ipv6_addr[16];
+    __u64 ipv6_ttl_expiration;
 } __attribute__((packed, aligned(8)));
 
 #if defined(__cplusplus)

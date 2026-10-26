@@ -1,10 +1,7 @@
 CMakeFiles/dns_daemon.dir/src/main.cpp.o: \
  /home/diller/Documents/net_accel_dns/src/main.cpp \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/stdc-predef.h \
- /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/iostream \
- /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/bits/requires_hosted.h \
- /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/x86_64-unknown-linux-gnu/bits/c++config.h \
- /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/x86_64-unknown-linux-gnu/bits/os_defines.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/arpa/inet.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/features.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/features-time64.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/wordsize.h \
@@ -13,8 +10,135 @@ CMakeFiles/dns_daemon.dir/src/main.cpp.o: \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/long-double.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/gnu/stubs.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/gnu/stubs-64.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/netinet/in.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/stdint-uintn.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/typesizes.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/time64.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/sys/socket.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/struct_iovec.h \
+ /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/lib/gcc/x86_64-unknown-linux-gnu/16.2.0/include/stddef.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/socket.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/sys/types.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/clock_t.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/clockid_t.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/time_t.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/timer_t.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/stdint-intn.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/endian.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/endian.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/endianness.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/byteswap.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/uintn-identity.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/sys/select.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/select.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/sigset_t.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/__sigset_t.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/struct_timeval.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/struct_timespec.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/select2.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/select-decl.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/pthreadtypes.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/thread-shared-types.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/pthreadtypes-arch.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/atomic_wide_counter.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/struct_mutex.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/struct_rwlock.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/socket_type.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/sockaddr.h \
+ /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm/socket.h \
+ /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm-generic/socket.h \
+ /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/linux/posix_types.h \
+ /nix/store/g5r5v78yig5lf2srpcm1dwcnzs2g522v-libbpf-1.8.0/include/linux/stddef.h \
+ /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm/posix_types.h \
+ /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm/posix_types_64.h \
+ /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm-generic/posix_types.h \
+ /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm/bitsperlong.h \
+ /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm-generic/bitsperlong.h \
+ /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm/sockios.h \
+ /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm-generic/sockios.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/struct_osockaddr.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/socket2.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/in.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/inet-fortified.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/inet-fortified-decl.h \
+ /nix/store/g5r5v78yig5lf2srpcm1dwcnzs2g522v-libbpf-1.8.0/include/bpf/bpf.h \
+ /nix/store/g5r5v78yig5lf2srpcm1dwcnzs2g522v-libbpf-1.8.0/include/linux/bpf.h \
+ /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/linux/types.h \
+ /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm/types.h \
+ /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm-generic/types.h \
+ /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm-generic/int-ll64.h \
+ /nix/store/g5r5v78yig5lf2srpcm1dwcnzs2g522v-libbpf-1.8.0/include/linux/bpf_common.h \
+ /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/lib/gcc/x86_64-unknown-linux-gnu/16.2.0/include/stdbool.h \
+ /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/lib/gcc/x86_64-unknown-linux-gnu/16.2.0/include/stdint.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/stdint.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/libc-header-start.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/wchar.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/stdint-least.h \
+ /nix/store/g5r5v78yig5lf2srpcm1dwcnzs2g522v-libbpf-1.8.0/include/bpf/libbpf_common.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/string.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/locale_t.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/__locale_t.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/strings.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/strings_fortified.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/string_fortified.h \
+ /nix/store/g5r5v78yig5lf2srpcm1dwcnzs2g522v-libbpf-1.8.0/include/bpf/libbpf_version.h \
+ /nix/store/g5r5v78yig5lf2srpcm1dwcnzs2g522v-libbpf-1.8.0/include/bpf/libbpf_legacy.h \
+ /nix/store/g5r5v78yig5lf2srpcm1dwcnzs2g522v-libbpf-1.8.0/include/bpf/libbpf.h \
+ /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/lib/gcc/x86_64-unknown-linux-gnu/16.2.0/include/stdarg.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/stdio.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/__fpos_t.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/__mbstate_t.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/__fpos64_t.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/__FILE.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/FILE.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/struct_FILE.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/cookie_io_functions_t.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/stdio_lim.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/floatn.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/floatn-common.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/stdio2-decl.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/stdio.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/stdio2.h \
+ /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/csignal \
+ /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/x86_64-unknown-linux-gnu/bits/c++config.h \
+ /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/x86_64-unknown-linux-gnu/bits/os_defines.h \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/x86_64-unknown-linux-gnu/bits/cpu_defines.h \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/pstl/pstl_config.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/signal.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/signum-generic.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/signum-arch.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/sig_atomic_t.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/siginfo_t.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/__sigval_t.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/siginfo-arch.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/siginfo-consts.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/siginfo-consts-arch.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/sigval_t.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/sigevent_t.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/sigevent-consts.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/sigaction.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/sigcontext.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/stack_t.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/sys/ucontext.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/sigstack.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/sigstksz.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/unistd.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/posix_opt.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/environments.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/confname.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/getopt_posix.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/getopt_core.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/unistd.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/unistd-decl.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/unistd_ext.h \
+ /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/linux/close_range.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/ss_flags.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/struct_sigstack.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/sigthread.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/signal_ext.h \
+ /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/iostream \
+ /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/bits/requires_hosted.h \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/ostream \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/bits/ostream.h \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/ios \
@@ -25,19 +149,8 @@ CMakeFiles/dns_daemon.dir/src/main.cpp.o: \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/bits/postypes.h \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/cwchar \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/wchar.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/libc-header-start.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/floatn.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/floatn-common.h \
- /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/lib/gcc/x86_64-unknown-linux-gnu/16.2.0/include/stddef.h \
- /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/lib/gcc/x86_64-unknown-linux-gnu/16.2.0/include/stdarg.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/wchar.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/wint_t.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/mbstate_t.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/__mbstate_t.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/__FILE.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/FILE.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/locale_t.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/__locale_t.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/wchar2-decl.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/wchar2.h \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/exception \
@@ -70,51 +183,22 @@ CMakeFiles/dns_daemon.dir/src/main.cpp.o: \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/locale.h \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/cctype \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/ctype.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/typesizes.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/time64.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/endian.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/endianness.h \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/bits/ios_base.h \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/ext/atomicity.h \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/x86_64-unknown-linux-gnu/bits/gthr.h \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/x86_64-unknown-linux-gnu/bits/gthr-default.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/pthread.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/sched.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/time_t.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/struct_timespec.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/sched.h \
  /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/linux/sched/types.h \
- /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/linux/types.h \
- /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm/types.h \
- /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm-generic/types.h \
- /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm-generic/int-ll64.h \
- /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm/bitsperlong.h \
- /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm-generic/bitsperlong.h \
- /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/linux/posix_types.h \
- /nix/store/g5r5v78yig5lf2srpcm1dwcnzs2g522v-libbpf-1.8.0/include/linux/stddef.h \
- /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm/posix_types.h \
- /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm/posix_types_64.h \
- /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm-generic/posix_types.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/struct_sched_param.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/cpu-set.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/time.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/time.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/timex.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/struct_timeval.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/clock_t.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/struct_tm.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/clockid_t.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/timer_t.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/struct_itimerspec.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/pthreadtypes.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/thread-shared-types.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/pthreadtypes-arch.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/atomic_wide_counter.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/struct_mutex.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/struct_rwlock.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/setjmp.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/__sigset_t.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/struct___jmp_buf_tag.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/pthread_stack_min-dynamic.h \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/x86_64-unknown-linux-gnu/bits/atomic_word.h \
@@ -160,31 +244,12 @@ CMakeFiles/dns_daemon.dir/src/main.cpp.o: \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/stdlib.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/waitflags.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/waitstatus.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/sys/types.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/stdint-intn.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/endian.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/byteswap.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/uintn-identity.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/sys/select.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/select.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/sigset_t.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/select2.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/select-decl.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/alloca.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/stdlib-bsearch.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/stdlib-float.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/stdlib.h \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/bits/std_abs.h \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/cstdio \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/stdio.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/__fpos_t.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/__fpos64_t.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/struct_FILE.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/cookie_io_functions_t.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/stdio_lim.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/stdio2-decl.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/stdio.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/stdio2.h \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/cerrno \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/errno.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/errno.h \
@@ -223,99 +288,34 @@ CMakeFiles/dns_daemon.dir/src/main.cpp.o: \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/bits/ostream.tcc \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/istream \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/bits/istream.tcc \
- /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/vector \
- /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/bits/stl_uninitialized.h \
- /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/bits/stl_vector.h \
- /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/bits/stl_bvector.h \
- /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/bits/vector.tcc \
- /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/csignal \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/signal.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/signum-generic.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/signum-arch.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/sig_atomic_t.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/siginfo_t.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/__sigval_t.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/siginfo-arch.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/siginfo-consts.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/siginfo-consts-arch.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/sigval_t.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/sigevent_t.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/sigevent-consts.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/sigaction.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/sigcontext.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/stack_t.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/sys/ucontext.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/sigstack.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/sigstksz.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/unistd.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/posix_opt.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/environments.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/confname.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/getopt_posix.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/getopt_core.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/unistd.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/unistd-decl.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/unistd_ext.h \
- /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/linux/close_range.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/ss_flags.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/struct_sigstack.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/sigthread.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/signal_ext.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/poll.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/sys/poll.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/poll.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/poll2.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/net/if.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/sys/socket.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/struct_iovec.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/socket.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/socket_type.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/sockaddr.h \
- /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm/socket.h \
- /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm-generic/socket.h \
- /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm/sockios.h \
- /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/asm-generic/sockios.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/struct_osockaddr.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/socket2.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/sys/resource.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/resource.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/struct_rusage.h \
  /nix/store/g5r5v78yig5lf2srpcm1dwcnzs2g522v-libbpf-1.8.0/include/linux/if_link.h \
  /nix/store/g5r5v78yig5lf2srpcm1dwcnzs2g522v-libbpf-1.8.0/include/linux/netlink.h \
  /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/linux/const.h \
  /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/linux/socket.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/net/ethernet.h \
- /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/lib/gcc/x86_64-unknown-linux-gnu/16.2.0/include/stdint.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/stdint.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/stdint-uintn.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/stdint-least.h \
  /nix/store/wf7d501qlfynh45147y25g9kww9z0a09-linux-headers-7.2/include/linux/if_ether.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/net/if.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/netinet/ip.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/netinet/in.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/in.h \
  /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/netinet/udp.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/arpa/inet.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/inet-fortified.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/inet-fortified-decl.h \
- /nix/store/xwkw4wjzyp8hg5v4nrgw786fw4wy0r31-xdp-tools-1.6.3/include/xdp/xsk.h \
- /nix/store/g5r5v78yig5lf2srpcm1dwcnzs2g522v-libbpf-1.8.0/include/bpf/libbpf.h \
- /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/lib/gcc/x86_64-unknown-linux-gnu/16.2.0/include/stdbool.h \
- /nix/store/g5r5v78yig5lf2srpcm1dwcnzs2g522v-libbpf-1.8.0/include/linux/bpf.h \
- /nix/store/g5r5v78yig5lf2srpcm1dwcnzs2g522v-libbpf-1.8.0/include/linux/bpf_common.h \
- /nix/store/g5r5v78yig5lf2srpcm1dwcnzs2g522v-libbpf-1.8.0/include/bpf/libbpf_common.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/string.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/strings.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/strings_fortified.h \
- /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/string_fortified.h \
- /nix/store/g5r5v78yig5lf2srpcm1dwcnzs2g522v-libbpf-1.8.0/include/bpf/libbpf_version.h \
- /nix/store/g5r5v78yig5lf2srpcm1dwcnzs2g522v-libbpf-1.8.0/include/bpf/libbpf_legacy.h \
- /nix/store/g5r5v78yig5lf2srpcm1dwcnzs2g522v-libbpf-1.8.0/include/linux/if_xdp.h \
- /nix/store/xwkw4wjzyp8hg5v4nrgw786fw4wy0r31-xdp-tools-1.6.3/include/xdp/libxdp.h \
- /nix/store/g5r5v78yig5lf2srpcm1dwcnzs2g522v-libbpf-1.8.0/include/bpf/bpf.h \
- /nix/store/xwkw4wjzyp8hg5v4nrgw786fw4wy0r31-xdp-tools-1.6.3/include/xdp/xdp_helpers.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/poll.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/sys/poll.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/poll.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/poll2.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/sys/resource.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/resource.h \
+ /nix/store/3zlgjcfm8j3nscrldjv8izxciybg0nh3-glibc-2.44-57-dev/include/bits/types/struct_rusage.h \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/utility \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/bits/stl_relops.h \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/bits/intcmp.h \
+ /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/vector \
+ /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/bits/stl_uninitialized.h \
+ /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/bits/stl_vector.h \
+ /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/bits/stl_bvector.h \
+ /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/bits/vector.tcc \
+ /nix/store/xwkw4wjzyp8hg5v4nrgw786fw4wy0r31-xdp-tools-1.6.3/include/xdp/libxdp.h \
+ /nix/store/xwkw4wjzyp8hg5v4nrgw786fw4wy0r31-xdp-tools-1.6.3/include/xdp/xdp_helpers.h \
+ /nix/store/xwkw4wjzyp8hg5v4nrgw786fw4wy0r31-xdp-tools-1.6.3/include/xdp/xsk.h \
+ /nix/store/g5r5v78yig5lf2srpcm1dwcnzs2g522v-libbpf-1.8.0/include/linux/if_xdp.h \
  /home/diller/Documents/net_accel_dns/include/shared_dns_table.hpp \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/cstdint \
  /nix/store/xpaz3fi6ibqxb9sla4gjlp0c82v566y8-gcc-16.2.0/include/c++/16.2.0/atomic \
