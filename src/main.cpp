@@ -1,579 +1,283 @@
+#include "resolver_service.hpp"
+#include "xsk_rings.hpp"
+#include <algorithm>
 #include <arpa/inet.h>
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
+#include <charconv>
 #include <csignal>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <linux/if_link.h>
-#include <net/ethernet.h>
+#include <memory>
 #include <net/if.h>
-#include <netinet/ip.h>
-#include <netinet/udp.h>
 #include <poll.h>
+#include <stdexcept>
 #include <string>
-#include <sys/resource.h>
+#include <sys/eventfd.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <unistd.h>
-#include <utility>
-#include <vector>
-#include <xdp/libxdp.h>
-#include <xdp/xsk.h>
-#include <thread>
-#include <atomic>
-#include <chrono>
-#include <cstring>
-#include "shared_dns_table.hpp"
 
+namespace {
 using namespace net_accel;
+volatile sig_atomic_t exiting = 0;
+void signal_handler(int) { exiting = 1; }
+constexpr uint32_t num_frames = 4096;
+constexpr uint32_t frame_size = XSK_UMEM__DEFAULT_FRAME_SIZE;
+constexpr uint32_t rx_frames = 2048;
+constexpr uint32_t batch_size = 64;
+static_assert(rx_frames < num_frames);
 
-volatile sig_atomic_t global_exit_flag = 0;
+void check(int result, const char* operation) {
+    if (result) throw std::runtime_error(std::string(operation) + ": " + std::strerror(result < 0 ? -result : result));
+}
+unsigned number(std::string_view text, unsigned maximum) {
+    unsigned result = 0;
+    auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), result);
+    if (error != std::errc{} || end != text.data() + text.size() || result > maximum)
+        throw std::invalid_argument("invalid numeric option");
+    return result;
+}
+std::filesystem::path default_bpf_path() {
+    auto executable = std::filesystem::canonical("/proc/self/exe").parent_path();
+    auto adjacent = executable / "xdp_filter.bpf.o";
+    if (std::filesystem::exists(adjacent)) return adjacent;
+    return executable / "../libexec/net_accel_dns/xdp_filter.bpf.o";
+}
+struct Options {
+    std::string interface;
+    std::string upstream = "1.1.1.1:53";
+    std::string cache_name = SharedDnsTable<>::SHM_PATH;
+    std::filesystem::path bpf;
+    unsigned workers = 4;
+    unsigned queue = 0;
+};
+void usage(const char* executable) {
+    std::cout << "Usage: " << executable << " <interface> [--upstream IPv4[:port]] [--workers 1..64]\n"
+                 "       [--queue 0..63] [--bpf-object path] [--cache-name /name]\n"
+                 "Runs generic XDP with AF_XDP copy mode on the selected receive queue.\n";
+}
+Options options(int argc, char** argv) {
+    if (argc < 2) throw std::invalid_argument("an interface is required (see --help)");
+    Options result;
+    result.interface = argv[1];
+    for (int i = 2; i < argc; i += 2) {
+        if (i + 1 >= argc) throw std::invalid_argument("missing option value");
+        std::string_view option = argv[i];
+        if (option == "--upstream") result.upstream = argv[i + 1];
+        else if (option == "--workers") {
+            result.workers = number(argv[i + 1], 64);
+            if (!result.workers) throw std::invalid_argument("at least one worker is required");
+        } else if (option == "--queue") result.queue = number(argv[i + 1], 63);
+        else if (option == "--bpf-object") result.bpf = argv[i + 1];
+        else if (option == "--cache-name") {
+            result.cache_name = argv[i + 1];
+            if (result.cache_name.size() < 2 || result.cache_name.size() > 240 || result.cache_name[0] != '/' ||
+                result.cache_name.find('/', 1) != std::string::npos)
+                throw std::invalid_argument("cache name must be /name without additional slashes");
+        }
+        else throw std::invalid_argument("unknown option: " + std::string(option));
+    }
+    if (result.bpf.empty()) result.bpf = default_bpf_path();
+    return result;
+}
 
-void sigint_handler(int) { global_exit_flag = 1; }
+class Runtime {
+public:
+    bpf_object* object = nullptr;
+    xsk_umem* umem = nullptr;
+    xsk_socket* socket = nullptr;
+    void* buffer = nullptr;
+    xsk_ring_prod fill{}, tx{};
+    xsk_ring_cons completion{}, rx{};
+    int notify = -1;
+    int ifindex = 0;
+    int program_fd = -1;
+    int map_fd = -1;
+    uint32_t queue = 0;
+    bool mapped = false;
+    bool attached = false;
+    size_t maximum_dns = 1232;
 
-constexpr size_t NUM_FRAMES = 4096;
-constexpr size_t FRAME_SIZE = XSK_UMEM__DEFAULT_FRAME_SIZE;
-constexpr size_t BATCH_SIZE = 64;
-
-struct xsk_umem_info {
-    struct xsk_ring_prod fq;
-    struct xsk_ring_cons cq;
-    struct xsk_umem *umem;
-    void *buffer;
+    ~Runtime() {
+        if (mapped) bpf_map_delete_elem(map_fd, &queue);
+        if (attached) {
+            bpf_xdp_attach_opts opts{};
+            opts.sz = sizeof(opts);
+            opts.old_prog_fd = program_fd;
+            int result = bpf_xdp_detach(ifindex, XDP_FLAGS_SKB_MODE, &opts);
+            if (result) std::cerr << "Could not detach owned XDP hook: " << std::strerror(-result) << '\n';
+        }
+        if (socket) xsk_socket__delete(socket);
+        if (umem) xsk_umem__delete(umem);
+        std::free(buffer);
+        if (object) bpf_object__close(object);
+        if (notify >= 0) close(notify);
+    }
+    void initialize(const Options& opts) {
+        queue = opts.queue;
+        ifindex = static_cast<int>(if_nametoindex(opts.interface.c_str()));
+        if (!ifindex) throw std::invalid_argument("interface not found: " + opts.interface);
+        int control = ::socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+        if (control < 0) throw std::runtime_error("MTU socket failed");
+        ifreq request{};
+        if (opts.interface.size() >= sizeof(request.ifr_name)) { close(control); throw std::invalid_argument("interface name too long"); }
+        std::copy(opts.interface.begin(), opts.interface.end(), request.ifr_name);
+        int result = ioctl(control, SIOCGIFMTU, &request);
+        close(control);
+        if (result || request.ifr_mtu < 540) throw std::runtime_error("interface MTU must accommodate 512-byte DNS messages");
+        maximum_dns = std::min({size_t(1232), size_t(request.ifr_mtu - 28), size_t(frame_size - 42)});
+        notify = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+        if (notify < 0) throw std::runtime_error("eventfd failed");
+        object = bpf_object__open_file(opts.bpf.c_str(), nullptr);
+        long error = libbpf_get_error(object);
+        if (error || !object) { object = nullptr; throw std::runtime_error("failed to open BPF object: " + opts.bpf.string()); }
+        check(bpf_object__load(object), "load BPF object");
+        auto* program = bpf_object__find_program_by_name(object, "xdp_dns_accelerator");
+        if (!program) throw std::runtime_error("DNS XDP program missing");
+        program_fd = bpf_program__fd(program);
+        map_fd = bpf_object__find_map_fd_by_name(object, "xsks_map");
+        if (program_fd < 0 || map_fd < 0) throw std::runtime_error("BPF program or socket map missing");
+        check(posix_memalign(&buffer, static_cast<size_t>(getpagesize()), num_frames * frame_size), "allocate UMEM");
+        xsk_umem_config umem_config{};
+        umem_config.fill_size = rx_frames;
+        umem_config.comp_size = num_frames - rx_frames;
+        umem_config.frame_size = frame_size;
+        check(xsk_umem__create(&umem, buffer, num_frames * frame_size, &fill, &completion, &umem_config), "create UMEM");
+        xsk_socket_config socket_config{};
+        socket_config.rx_size = rx_frames;
+        socket_config.tx_size = num_frames - rx_frames;
+        socket_config.libxdp_flags = XSK_LIBXDP_FLAGS__INHIBIT_PROG_LOAD;
+        socket_config.xdp_flags = XDP_FLAGS_SKB_MODE;
+        socket_config.bind_flags = XDP_COPY;
+        check(xsk_socket__create(&socket, opts.interface.c_str(), queue, umem, &rx, &tx, &socket_config), "create AF_XDP socket");
+        int fd = xsk_socket__fd(socket);
+        if (bpf_map_update_elem(map_fd, &queue, &fd, BPF_ANY)) throw std::runtime_error("populate XSK map failed");
+        mapped = true;
+    }
+    void attach() {
+        // Refuse to replace another program, including a second daemon instance.
+        check(bpf_xdp_attach(ifindex, program_fd, XDP_FLAGS_SKB_MODE | XDP_FLAGS_UPDATE_IF_NOEXIST, nullptr), "attach XDP program");
+        attached = true;
+    }
 };
 
-struct xsk_socket_info {
-    struct xsk_ring_cons rx;
-    struct xsk_ring_prod tx;
-    struct xsk_umem_info *umem;
-    struct xsk_socket *xsk;
-};
-
-struct dns_header {
-    uint16_t id;
-    uint16_t flags;
-    uint16_t qdcount;
-    uint16_t ancount;
-    uint16_t nscount;
-    uint16_t arcount;
-} __attribute__((packed));
-
-inline uint16_t calculate_ip_checksum(const uint8_t* ip_header) {
-    uint32_t sum = 0;
-    for (int i = 0; i < 20; i += 2) {
-        if (i == 10) continue; // Skip existing checksum field
-        uint16_t word = (ip_header[i] << 8) | ip_header[i + 1];
-        sum += word;
-    }
-    while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
-    return htons(static_cast<uint16_t>(~sum));
-}
-
-inline void swap_headers_ipv4(uint8_t* pkt, uint16_t total_ip_len, uint16_t total_udp_len) {
-    // 1. Swap MAC addresses (Ethernet header 0..13)
-    uint8_t tmp_mac[6];
-    std::memcpy(tmp_mac, pkt, 6);
-    std::memcpy(pkt, pkt + 6, 6);
-    std::memcpy(pkt + 6, tmp_mac, 6);
-
-    // 2. Swap IPv4 addresses (IP header 14..33, src @ 26, dst @ 30)
-    uint32_t src_ip, dst_ip;
-    std::memcpy(&src_ip, pkt + 26, 4);
-    std::memcpy(&dst_ip, pkt + 30, 4);
-    std::memcpy(pkt + 26, &dst_ip, 4);
-    std::memcpy(pkt + 30, &src_ip, 4);
-
-    // 3. Update IP Total Length (offset 16)
-    *reinterpret_cast<uint16_t*>(pkt + 16) = htons(total_ip_len);
-
-    // 4. Recalculate IPv4 Checksum (offset 24)
-    pkt[24] = 0;
-    pkt[25] = 0;
-    uint16_t ip_csum = calculate_ip_checksum(pkt + 14);
-    std::memcpy(pkt + 24, &ip_csum, 2);
-
-    // 5. Swap UDP Ports (UDP header 34..41, src @ 34, dst @ 36)
-    uint16_t src_port, dst_port;
-    std::memcpy(&src_port, pkt + 34, 2);
-    std::memcpy(&dst_port, pkt + 36, 2);
-    std::memcpy(pkt + 34, &dst_port, 2);
-    std::memcpy(pkt + 36, &src_port, 2);
-
-    // 6. Update UDP Length (offset 38) and Clear UDP Checksum (offset 40)
-    *reinterpret_cast<uint16_t*>(pkt + 38) = htons(total_udp_len);
-    pkt[40] = 0;
-    pkt[41] = 0;
-}
-
-// Returns parsed domain string & outputs total DNS payload length (Header + Question)
-inline std::string parse_dns_name(const uint8_t* pkt, size_t dns_payload_offset, size_t& query_len_out) {
-    std::string domain;
-    size_t offset = dns_payload_offset + 12; // Skip 12-byte DNS header
-    size_t start_offset = offset;
-
-    while (pkt[offset] != 0) {
-        uint8_t len = pkt[offset];
-        if ((len & 0xC0) == 0xC0) {
-            offset += 2;
-            break;
+void event_loop(Runtime& runtime, ResolverService& service, SharedDnsTable<>& cache) {
+    std::deque<uint64_t> recycle;
+    std::vector<uint64_t> tx_pool;
+    std::deque<PendingTx> pending;
+    for (uint64_t i = 0; i < rx_frames; ++i) recycle.push_back(i * frame_size);
+    for (uint64_t i = rx_frames; i < num_frames; ++i) tx_pool.push_back(i * frame_size);
+    if (refill_frames(runtime.fill, recycle) != rx_frames) throw std::runtime_error("initial fill ring reservation failed");
+    runtime.attach();
+    std::cout << "DNS accelerator ready: XDP attached, AF_XDP queue " << runtime.queue
+              << ", RX fill ring populated\n" << std::flush;
+    uint64_t next_sweep = monotonic_ns() + 60000000000ULL;
+    size_t inflight = 0;
+    bool active = true;
+    while (!exiting) {
+        pollfd descriptors[2]{{xsk_socket__fd(runtime.socket), POLLIN, 0}, {runtime.notify, POLLIN, 0}};
+        int result = poll(descriptors, 2, active ? 0 : (inflight || !pending.empty() ? 1 : 100));
+        if (result < 0 && errno != EINTR) throw std::runtime_error("AF_XDP poll failed");
+        if (descriptors[0].revents & (POLLERR | POLLHUP | POLLNVAL)) throw std::runtime_error("AF_XDP socket became unavailable");
+        if (descriptors[1].revents & POLLIN) {
+            uint64_t value;
+            while (read(runtime.notify, &value, sizeof(value)) < 0 && errno == EINTR) {}
         }
-        offset++;
-        if (!domain.empty()) domain += ".";
-        domain.append(reinterpret_cast<const char*>(pkt + offset), len);
-        offset += len;
-    }
-    if (pkt[start_offset] != 0 && (pkt[offset] & 0xC0) != 0xC0) offset++;
-
-    // Total length from start of DNS Header (42) to end of Question (QTYPE + QCLASS)
-    query_len_out = (offset - dns_payload_offset) + 4;
-    return domain;
-}
-
-xsk_umem_info *configure_umem() {
-    auto *ui = new xsk_umem_info();
-    if (posix_memalign(&ui->buffer, getpagesize(), NUM_FRAMES * FRAME_SIZE)) {
-        std::cerr << "Failed to allocate UMEM buffer\n";
-        exit(EXIT_FAILURE);
-    }
-
-    struct xsk_umem_config cfg = {
-        .fill_size = XSK_RING_PROD__DEFAULT_NUM_DESCS,
-        .comp_size = XSK_RING_CONS__DEFAULT_NUM_DESCS,
-        .frame_size = FRAME_SIZE,
-        .frame_headroom = XSK_UMEM__DEFAULT_FRAME_HEADROOM,
-        .flags = 0
-    };
-
-    if (xsk_umem__create(&ui->umem, ui->buffer, NUM_FRAMES * FRAME_SIZE, &ui->fq, &ui->cq, &cfg)) {
-        std::cerr << "Failed to create UMEM\n";
-        exit(EXIT_FAILURE);
-    }
-    return ui;
-}
-
-xsk_socket_info *setup_socket(const char *ifname, uint32_t queue_id, xsk_umem_info *umem_info) {
-    auto *si = new xsk_socket_info();
-    si->umem = umem_info;
-
-    struct xsk_socket_config cfg = {
-        .rx_size = XSK_RING_CONS__DEFAULT_NUM_DESCS,
-        .tx_size = XSK_RING_PROD__DEFAULT_NUM_DESCS,
-        .libxdp_flags = XSK_LIBXDP_FLAGS__INHIBIT_PROG_LOAD,
-        .xdp_flags = XDP_FLAGS_SKB_MODE,
-        .bind_flags = XDP_COPY
-    };
-
-    if (xsk_socket__create(&si->xsk, ifname, queue_id, umem_info->umem, &si->rx, &si->tx, &cfg)) {
-        std::cerr << "Failed to create AF_XDP socket on " << ifname << "\n";
-        exit(EXIT_FAILURE);
-    }
-    return si;
-}
-
-bool resolve_upstream_ipv4(const uint8_t* query_payload, size_t query_len, uint32_t &out_ipv4, uint32_t &out_ttl) {
-    out_ttl = 60;
-    out_ipv4 = 0;
-
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock < 0) return false;
-
-    struct timeval tv{1, 0};
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
-    struct sockaddr_in upstream_addr{};
-    upstream_addr.sin_family = AF_INET;
-    upstream_addr.sin_port = htons(53);
-    inet_pton(AF_INET, "1.1.1.1", &upstream_addr.sin_addr);
-
-    if (sendto(sock, query_payload, query_len, 0, (struct sockaddr*)&upstream_addr, sizeof(upstream_addr)) < 0) {
-        close(sock);
-        return false;
-    }
-
-    uint8_t resp_buf[512];
-    ssize_t resp_len = recv(sock, resp_buf, sizeof(resp_buf), 0);
-    close(sock);
-
-    if (resp_len < 12) return false;
-
-    uint16_t flags   = ntohs(*reinterpret_cast<uint16_t*>(resp_buf + 2));
-    uint16_t qdcount = ntohs(*reinterpret_cast<uint16_t*>(resp_buf + 4));
-    uint16_t ancount = ntohs(*reinterpret_cast<uint16_t*>(resp_buf + 6));
-    if ((flags & 0x0F) != 0) return false;
-
-    if (ancount == 0) return true;
-
-    size_t offset = 12;
-    for (uint16_t i = 0; i < qdcount; ++i) {
-        while (offset < (size_t)resp_len) {
-            uint8_t len = resp_buf[offset];
-            if (len == 0) { offset += 1; break; }
-            if ((len & 0xC0) == 0xC0) { offset += 2; break; }
-            offset += 1 + len;
+        active = false;
+        uint32_t index = 0;
+        uint32_t count = xsk_ring_cons__peek(&runtime.completion, batch_size, &index);
+        for (uint32_t i = 0; i < count; ++i) {
+            uint64_t addr = *xsk_ring_cons__comp_addr(&runtime.completion, index + i);
+            if (addr < uint64_t(rx_frames) * frame_size || addr >= uint64_t(num_frames) * frame_size || addr % frame_size)
+                throw std::runtime_error("invalid TX completion address");
+            tx_pool.push_back(addr);
         }
-        offset += 4;
-    }
+        if (count > inflight) throw std::runtime_error("invalid TX completion count");
+        inflight -= count;
+        xsk_ring_cons__release(&runtime.completion, count);
+        active |= count != 0;
 
-    for (uint16_t i = 0; i < ancount && offset < (size_t)resp_len; ++i) {
-        while (offset < (size_t)resp_len) {
-            uint8_t len = resp_buf[offset];
-            if (len == 0) { offset += 1; break; }
-            if ((len & 0xC0) == 0xC0) { offset += 2; break; }
-            offset += 1 + len;
-        }
-        if (offset + 10 > (size_t)resp_len) break;
-
-        uint16_t rtype    = ntohs(*reinterpret_cast<uint16_t*>(resp_buf + offset));
-        uint32_t ttl      = ntohl(*reinterpret_cast<uint32_t*>(resp_buf + offset + 4));
-        uint16_t rdlength = ntohs(*reinterpret_cast<uint16_t*>(resp_buf + offset + 8));
-        offset += 10;
-
-        if (rtype == 1 && rdlength == 4 && offset + 4 <= (size_t)resp_len) {
-            out_ipv4 = *reinterpret_cast<const uint32_t*>(resp_buf + offset);
-            out_ttl = (ttl > 0) ? ttl : 60;
-            return true;
-        }
-        offset += rdlength;
-    }
-    return true;
-}
-
-bool resolve_upstream_ipv6(const uint8_t* query_payload, size_t query_len, uint8_t* out_ipv6, uint32_t &out_ttl) {
-    out_ttl = 60;
-    std::memset(out_ipv6, 0, 16);
-
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock < 0) return false;
-
-    struct timeval tv{1, 0};
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
-    struct sockaddr_in upstream_addr{};
-    upstream_addr.sin_family = AF_INET;
-    upstream_addr.sin_port = htons(53);
-    inet_pton(AF_INET, "1.1.1.1", &upstream_addr.sin_addr);
-
-    if (sendto(sock, query_payload, query_len, 0, (struct sockaddr*)&upstream_addr, sizeof(upstream_addr)) < 0) {
-        close(sock);
-        return false;
-    }
-
-    uint8_t resp_buf[512];
-    ssize_t resp_len = recv(sock, resp_buf, sizeof(resp_buf), 0);
-    close(sock);
-
-    if (resp_len < 12) return false;
-
-    uint16_t flags   = ntohs(*reinterpret_cast<uint16_t*>(resp_buf + 2));
-    uint16_t qdcount = ntohs(*reinterpret_cast<uint16_t*>(resp_buf + 4));
-    uint16_t ancount = ntohs(*reinterpret_cast<uint16_t*>(resp_buf + 6));
-    if ((flags & 0x0F) != 0) return false;
-
-    if (ancount == 0) return true;
-
-    size_t offset = 12;
-    for (uint16_t i = 0; i < qdcount; ++i) {
-        while (offset < (size_t)resp_len) {
-            uint8_t len = resp_buf[offset];
-            if (len == 0) { offset += 1; break; }
-            if ((len & 0xC0) == 0xC0) { offset += 2; break; }
-            offset += 1 + len;
-        }
-        offset += 4;
-    }
-
-    for (uint16_t i = 0; i < ancount && offset < (size_t)resp_len; ++i) {
-        while (offset < (size_t)resp_len) {
-            uint8_t len = resp_buf[offset];
-            if (len == 0) { offset += 1; break; }
-            if ((len & 0xC0) == 0xC0) { offset += 2; break; }
-            offset += 1 + len;
-        }
-
-        if (offset + 10 > (size_t)resp_len) break;
-
-        uint16_t rtype    = ntohs(*reinterpret_cast<uint16_t*>(resp_buf + offset));
-        uint32_t ttl      = ntohl(*reinterpret_cast<uint32_t*>(resp_buf + offset + 4));
-        uint16_t rdlength = ntohs(*reinterpret_cast<uint16_t*>(resp_buf + offset + 8));
-        offset += 10;
-
-        if (rtype == 28 && rdlength == 16 && offset + 16 <= (size_t)resp_len) {
-            std::memcpy(out_ipv6, resp_buf + offset, 16);
-            out_ttl = (ttl > 0) ? ttl : 60;
-            return true;
-        }
-        offset += rdlength;
-    }
-    return true;
-}
-
-std::atomic<bool> running{true};
-
-void start_gc_thread(SharedDnsTable<131072>* table) {
-    std::thread([table]() {
-        std::cout << "[+] DNS Cache GC thread started.\n";
-        while (running.load(std::memory_order_relaxed)) {
-            std::this_thread::sleep_for(std::chrono::minutes(5));
-            if (!running.load(std::memory_order_relaxed)) break;
-
-            size_t evicted = table->sweep_expired();
-            if (evicted > 0) {
-                std::cout << "[GC] Swept cache: Evicted " << evicted << " expired DNS records.\n";
-            }
-        }
-    }).detach();
-}
-
-int main(int argc, char **argv) {
-    if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <interface>\n";
-        return EXIT_FAILURE;
-    }
-    const char *ifname = argv[1];
-    uint32_t queue_id = 0;
-    int ifindex = if_nametoindex(ifname);
-
-    if (ifindex == 0) {
-        std::cerr << "Invalid interface: " << ifname << "\n";
-        return EXIT_FAILURE;
-    }
-
-    signal(SIGINT, sigint_handler);
-    signal(SIGTERM, sigint_handler);
-
-    struct bpf_object *obj = bpf_object__open_file("xdp_filter.bpf.o", NULL);
-    if (!obj || bpf_object__load(obj)) {
-        std::cerr << "[!] Failed to load xdp_filter.bpf.o\n";
-        return EXIT_FAILURE;
-    }
-
-    int prog_fd = bpf_program__fd(bpf_object__find_program_by_name(obj, "xdp_dns_accelerator"));
-
-    if (bpf_xdp_attach(ifindex, prog_fd, XDP_FLAGS_SKB_MODE, NULL) < 0) {
-        std::cerr << "[!] Failed to attach eBPF program to interface\n";
-        return EXIT_FAILURE;
-    }
-    std::cout << "[+] eBPF program injected into kernel driver for " << ifname << "\n";
-
-    auto *dns_cache = SharedDnsTable<>::create_or_attach(true);
-    std::cout << "[+] Shared memory cache initialized at " << SharedDnsTable<>::SHM_PATH << "\n";
-
-    dns_cache->insert("google.com", inet_addr("1.2.3.4"), 0xFFFFFFFFFFFFFFFFULL);
-    start_gc_thread(dns_cache);
-    std::cout << "[+] Test record inserted: google.com -> 1.2.3.4\n";
-
-    xsk_umem_info *umem = configure_umem();
-    xsk_socket_info *xsk = setup_socket(ifname, queue_id, umem);
-
-    int map_fd = bpf_object__find_map_fd_by_name(obj, "xsks_map");
-    int xsk_fd = xsk_socket__fd(xsk->xsk);
-    if (bpf_map_update_elem(map_fd, &queue_id, &xsk_fd, BPF_ANY) != 0) {
-        std::cerr << "[!] Failed to link AF_XDP socket into eBPF map\n";
-        return EXIT_FAILURE;
-    }
-
-    uint32_t fq_size = XSK_RING_PROD__DEFAULT_NUM_DESCS;
-    uint32_t idx;
-    if (xsk_ring_prod__reserve(&umem->fq, fq_size, &idx) != fq_size)
-        return EXIT_FAILURE;
-    for (size_t i = 0; i < fq_size; i++) {
-        *xsk_ring_prod__fill_addr(&umem->fq, idx++) = i * FRAME_SIZE;
-    }
-    xsk_ring_prod__submit(&umem->fq, fq_size);
-
-    std::cout << "[+] AF_XDP socket bound to " << ifname << " queue " << queue_id << "\n";
-    std::cout << "[+] Entering fast-path poll loop...\n";
-
-    while (!global_exit_flag) {
-        struct pollfd fds[1] = {};
-        fds[0].fd = xsk_socket__fd(xsk->xsk);
-        fds[0].events = POLLIN;
-
-        int ret = poll(fds, 1, 100);
-
-        // Reap completed TX buffers back into Fill Queue (fq) to prevent UMEM buffer exhaustion
-        uint32_t cq_idx = 0;
-        uint32_t completed = xsk_ring_cons__peek(&xsk->umem->cq, BATCH_SIZE, &cq_idx);
-        if (completed > 0) {
-            uint32_t fill_idx = 0;
-            uint32_t fill_reserved = xsk_ring_prod__reserve(&xsk->umem->fq, completed, &fill_idx);
-            for (uint32_t k = 0; k < fill_reserved; ++k) {
-                uint64_t addr = *xsk_ring_cons__comp_addr(&xsk->umem->cq, cq_idx + k);
-                *xsk_ring_prod__fill_addr(&xsk->umem->fq, fill_idx + k) = addr;
-            }
-            xsk_ring_prod__submit(&xsk->umem->fq, fill_reserved);
-            xsk_ring_cons__release(&xsk->umem->cq, completed);
-        }
-
-        if (ret <= 0) continue;
-
-        uint32_t idx_rx = 0;
-        uint32_t rcvd = xsk_ring_cons__peek(&xsk->rx, BATCH_SIZE, &idx_rx);
-        if (!rcvd) continue;
-
-        std::vector<uint64_t> recycle_queue;
-        std::vector<std::pair<uint64_t, uint32_t>> tx_queue;
-
-        recycle_queue.reserve(rcvd);
-        tx_queue.reserve(rcvd);
-
-        uint64_t now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
-
-        for (uint32_t i = 0; i < rcvd; ++i) {
-            uint64_t addr = xsk_ring_cons__rx_desc(&xsk->rx, idx_rx + i)->addr;
-            uint32_t pkt_len = xsk_ring_cons__rx_desc(&xsk->rx, idx_rx + i)->len;
-            uint8_t* pkt = (uint8_t*)xsk_umem__get_data(xsk->umem->buffer, addr);
-
-            // Framing check: Ethernet (14) + IP (20) + UDP (8) = 42
-            if (pkt_len < 42 || pkt[12] != 0x08 || pkt[13] != 0x00 || pkt[23] != 17) {
-                recycle_queue.push_back(addr);
-                continue;
-            }
-
-            uint16_t dst_port = ntohs(*reinterpret_cast<uint16_t*>(pkt + 36));
-            size_t dns_payload_offset = 42;
-
-            if (dst_port != 53 || pkt_len < dns_payload_offset + 12) {
-                recycle_queue.push_back(addr);
-                continue;
-            }
-
-            size_t query_section_len = 0;
-            std::string query_domain = parse_dns_name(pkt, dns_payload_offset, query_section_len);
-            
-            // Correct QTYPE offset calculation (Offset 42 + total Question section length - 4)
-            size_t qtype_offset = dns_payload_offset + query_section_len - 4;
-            uint16_t qtype = ntohs(*reinterpret_cast<uint16_t*>(pkt + qtype_offset));
-
-            bool handled = false;
-
-            // --------------------------------------------------------------------
-            // TYPE A (IPv4 Resolution)
-            // --------------------------------------------------------------------
-            if (qtype == 1) {
-                uint32_t cached_ipv4 = 0;
-
-                if (dns_cache->lookup(query_domain, cached_ipv4, now_ns)) {
-                    std::cout << "[HIT]  A " << query_domain << " (0 msec)\n";
-                } else {
-                    std::cout << "[MISS] A " << query_domain << " -> Cloudflare...\n";
-                    uint32_t resolved_ip = 0;
-                    uint32_t dynamic_ttl = 60;
-                    
-                    if (resolve_upstream_ipv4(pkt + dns_payload_offset, pkt_len - dns_payload_offset, resolved_ip, dynamic_ttl)) {
-                        uint64_t expiry_ns = now_ns + (static_cast<uint64_t>(dynamic_ttl) * 1000000000ULL);
-                        dns_cache->insert(query_domain, resolved_ip, expiry_ns);
-                        cached_ipv4 = resolved_ip;
-                    }
+        count = xsk_ring_cons__peek(&runtime.rx, batch_size, &index);
+        for (uint32_t i = 0; i < count; ++i) {
+            const auto* desc = xsk_ring_cons__rx_desc(&runtime.rx, index + i);
+            uint64_t base = desc->addr & ~(uint64_t(frame_size) - 1);
+            if (base >= uint64_t(rx_frames) * frame_size || desc->len > frame_size - (desc->addr - base))
+                throw std::runtime_error("invalid RX descriptor");
+            auto* data = static_cast<uint8_t*>(xsk_umem__get_data(runtime.buffer, desc->addr));
+            PacketError error;
+            auto packet = parse_ipv4_udp(View(data, desc->len), &error);
+            if (packet) service.submit(std::move(*packet));
+            else {
+                service.metrics.malformed.fetch_add(1, std::memory_order_relaxed);
+                if (error == PacketError::ipv4_checksum)
+                    service.metrics.bad_ip_checksums.fetch_add(1, std::memory_order_relaxed);
+                if (error == PacketError::udp_checksum &&
+                    service.metrics.bad_udp_checksums.fetch_add(1, std::memory_order_relaxed) == 0) {
+                    std::cerr << "Rejected UDP checksum. For veth testing, disable TX checksum offload on the sending peer; "
+                                 "generic AF_XDP cannot distinguish an unfinished checksum from a corrupt packet.\n";
                 }
-
-                // Header Flags: Standard Response (0x8180)
-                *reinterpret_cast<uint16_t*>(pkt + dns_payload_offset + 2) = htons(0x8180);
-                *reinterpret_cast<uint16_t*>(pkt + dns_payload_offset + 6) = htons(cached_ipv4 ? 1 : 0); // ANCOUNT
-                *reinterpret_cast<uint16_t*>(pkt + dns_payload_offset + 8) = 0; // NSCOUNT = 0
-                *reinterpret_cast<uint16_t*>(pkt + dns_payload_offset + 10) = 0; // ARCOUNT = 0
-
-                size_t resp_dns_len = query_section_len;
-
-                if (cached_ipv4 != 0) {
-                    uint8_t* ans_ptr = pkt + dns_payload_offset + resp_dns_len;
-                    *reinterpret_cast<uint16_t*>(ans_ptr) = htons(0xC00C);     // Compression Pointer to Name
-                    *reinterpret_cast<uint16_t*>(ans_ptr + 2) = htons(1);       // TYPE A
-                    *reinterpret_cast<uint16_t*>(ans_ptr + 4) = htons(1);       // CLASS IN
-                    *reinterpret_cast<uint32_t*>(ans_ptr + 6) = htonl(60);      // TTL
-                    *reinterpret_cast<uint16_t*>(ans_ptr + 10) = htons(4);      // RDLEN
-                    *reinterpret_cast<uint32_t*>(ans_ptr + 12) = cached_ipv4;   // RDATA
-                    resp_dns_len += 16;
-                }
-
-                uint16_t total_udp_len = 8 + resp_dns_len;
-                uint16_t total_ip_len = 20 + total_udp_len;
-
-                swap_headers_ipv4(pkt, total_ip_len, total_udp_len);
-                tx_queue.push_back({addr, static_cast<uint32_t>(14 + total_ip_len)});
-                handled = true;
             }
-            // --------------------------------------------------------------------
-            // TYPE AAAA (IPv6 Resolution)
-            // --------------------------------------------------------------------
-            else if (qtype == 28) {
-                uint8_t cached_ipv6[16]{0};
-                bool hit = dns_cache->lookup_ipv6(query_domain, cached_ipv6, now_ns);
-
-                if (hit) {
-                    std::cout << "[HIT]  AAAA " << query_domain << " (0 msec)\n";
-                } else {
-                    std::cout << "[MISS] AAAA " << query_domain << " -> Cloudflare...\n";
-                    uint8_t ipv6_res[16]{0};
-                    uint32_t dynamic_ttl = 60;
-                    
-                    if (resolve_upstream_ipv6(pkt + dns_payload_offset, pkt_len - dns_payload_offset, ipv6_res, dynamic_ttl)) {
-                        uint64_t expiry_ns = now_ns + (static_cast<uint64_t>(dynamic_ttl) * 1000000000ULL);
-                        dns_cache->insert_ipv6(query_domain, ipv6_res, expiry_ns);
-                        std::memcpy(cached_ipv6, ipv6_res, 16);
-                    }
-                }
-
-                static const uint8_t zero_ip[16]{0};
-                bool has_ip = std::memcmp(cached_ipv6, zero_ip, 16) != 0;
-
-                *reinterpret_cast<uint16_t*>(pkt + dns_payload_offset + 2) = htons(0x8180);
-                *reinterpret_cast<uint16_t*>(pkt + dns_payload_offset + 6) = htons(has_ip ? 1 : 0);
-                *reinterpret_cast<uint16_t*>(pkt + dns_payload_offset + 8) = 0;
-                *reinterpret_cast<uint16_t*>(pkt + dns_payload_offset + 10) = 0;
-
-                size_t resp_dns_len = query_section_len;
-
-                if (has_ip) {
-                    uint8_t* ans_ptr = pkt + dns_payload_offset + resp_dns_len;
-                    *reinterpret_cast<uint16_t*>(ans_ptr) = htons(0xC00C);
-                    *reinterpret_cast<uint16_t*>(ans_ptr + 2) = htons(28); // TYPE AAAA
-                    *reinterpret_cast<uint16_t*>(ans_ptr + 4) = htons(1);
-                    *reinterpret_cast<uint32_t*>(ans_ptr + 6) = htonl(60);
-                    *reinterpret_cast<uint16_t*>(ans_ptr + 10) = htons(16);
-                    std::memcpy(ans_ptr + 12, cached_ipv6, 16);
-                    resp_dns_len += 28;
-                }
-
-                uint16_t total_udp_len = 8 + resp_dns_len;
-                uint16_t total_ip_len = 20 + total_udp_len;
-
-                swap_headers_ipv4(pkt, total_ip_len, total_udp_len);
-                tx_queue.push_back({addr, static_cast<uint32_t>(14 + total_ip_len)});
-                handled = true;
-            }
-
-            if (!handled) {
-                recycle_queue.push_back(addr);
-            }
+            recycle.push_back(base);
         }
+        xsk_ring_cons__release(&runtime.rx, count);
+        active |= count == batch_size;
+        refill_frames(runtime.fill, recycle); // Keep every unreserved frame for retry.
 
-        xsk_ring_cons__release(&xsk->rx, rcvd);
-
-        if (!tx_queue.empty()) {
-            uint32_t tx_idx = 0;
-            uint32_t tx_reserved = xsk_ring_prod__reserve(&xsk->tx, tx_queue.size(), &tx_idx);
-            for (size_t k = 0; k < tx_reserved; ++k) {
-                struct xdp_desc* tx_desc = xsk_ring_prod__tx_desc(&xsk->tx, tx_idx + k);
-                tx_desc->addr = tx_queue[k].first;
-                tx_desc->len = tx_queue[k].second;
-            }
-            xsk_ring_prod__submit(&xsk->tx, tx_reserved);
-            sendto(xsk_socket__fd(xsk->xsk), NULL, 0, MSG_DONTWAIT, NULL, 0);
+        Bytes packet;
+        while (!tx_pool.empty() && service.try_response(packet)) {
+            if (packet.size() > frame_size) throw std::runtime_error("response exceeds UMEM frame");
+            uint64_t addr = tx_pool.back();
+            tx_pool.pop_back();
+            std::memcpy(xsk_umem__get_data(runtime.buffer, addr), packet.data(), packet.size());
+            pending.push_back({addr, static_cast<uint32_t>(packet.size())});
         }
-
-        if (!recycle_queue.empty()) {
-            uint32_t fill_idx = 0;
-            uint32_t fill_reserved = xsk_ring_prod__reserve(&xsk->umem->fq, recycle_queue.size(), &fill_idx);
-            for (size_t k = 0; k < fill_reserved; ++k) {
-                *xsk_ring_prod__fill_addr(&xsk->umem->fq, fill_idx + k) = recycle_queue[k];
-            }
-            xsk_ring_prod__submit(&xsk->umem->fq, fill_reserved);
+        auto submitted = submit_frames(runtime.tx, pending);
+        inflight += submitted;
+        active |= submitted != 0;
+        if (inflight) {
+            int kicked = sendto(xsk_socket__fd(runtime.socket), nullptr, 0, MSG_DONTWAIT, nullptr, 0);
+            if (kicked < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != ENOBUFS && errno != EBUSY && errno != EINTR)
+                throw std::runtime_error("AF_XDP transmit failed: " + std::string(std::strerror(errno)));
         }
+        uint64_t now = monotonic_ns();
+        if (now >= next_sweep) { cache.sweep_expired(now); next_sweep = now + 60000000000ULL; }
     }
+}
+} // namespace
 
-    running.store(false);
-    std::cout << "\n[!] Detaching kernel hooks and shutting down...\n";
-    bpf_xdp_detach(ifindex, XDP_FLAGS_SKB_MODE, NULL);
-    xsk_socket__delete(xsk->xsk);
-    xsk_umem__delete(umem->umem);
-    return 0;
+int main(int argc, char** argv) {
+    if (argc == 2 && std::string_view(argv[1]) == "--help") { usage(argv[0]); return 0; }
+    try {
+        auto opts = options(argc, argv);
+        auto upstream = net_accel::upstream_address(opts.upstream);
+        struct sigaction action{};
+        action.sa_handler = signal_handler;
+        sigemptyset(&action.sa_mask);
+        if (sigaction(SIGINT, &action, nullptr) || sigaction(SIGTERM, &action, nullptr))
+            throw std::runtime_error("signal handler installation failed");
+        Runtime runtime;
+        runtime.initialize(opts);
+        using Cache = net_accel::SharedDnsTable<>;
+        std::unique_ptr<Cache, decltype(&Cache::unmap)> cache(Cache::create_or_attach(true, opts.cache_name.c_str()), &Cache::unmap);
+        net_accel::ResolverService service(cache.get(), upstream, runtime.maximum_dns, opts.workers, [&] {
+            uint64_t value = 1;
+            while (write(runtime.notify, &value, sizeof(value)) < 0 && errno == EINTR) {}
+        });
+        std::cout << "Interface=" << opts.interface << " upstream=" << opts.upstream
+                  << " workers=" << opts.workers << " (XDP copy mode)\n";
+        event_loop(runtime, service, *cache);
+        std::cout << "Queries=" << service.metrics.received << " hits=" << service.metrics.hits
+                  << " forwarded=" << service.metrics.forwarded << " failures=" << service.metrics.failures
+                  << " overloaded=" << service.metrics.overloaded << " malformed=" << service.metrics.malformed
+                  << " bad_ip_checksums=" << service.metrics.bad_ip_checksums
+                  << " bad_udp_checksums=" << service.metrics.bad_udp_checksums << '\n';
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << "dns_daemon: " << error.what() << '\n';
+        return 1;
+    }
 }

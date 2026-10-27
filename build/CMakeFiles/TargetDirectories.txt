@@ -1,4 +1,0 @@
-/home/diller/Documents/net_accel_dns/build/CMakeFiles/bpf_target.dir
-/home/diller/Documents/net_accel_dns/build/CMakeFiles/dns_daemon.dir
-/home/diller/Documents/net_accel_dns/build/CMakeFiles/edit_cache.dir
-/home/diller/Documents/net_accel_dns/build/CMakeFiles/rebuild_cache.dir

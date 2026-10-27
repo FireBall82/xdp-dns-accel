@@ -1,29 +1,13 @@
+Future work
+===========
 
-4. EDNS0 Handling
+- Native XDP and hardware zero-copy as explicit, benchmarked modes.
+- Multiple AF_XDP receive queues with per-queue event loops and RSS coverage.
+- Optional acceleration of IPv6 transport and VLAN-tagged frames.
+- A deployment-specific systemd unit and namespace setup, once interface names,
+  addresses, fallback resolver, routing, and NAT policy are defined.
+- Measured throughput/latency and exported runtime metrics under sustained load.
 
-You are currently stripping the ARCOUNT (Additional Records) to 0 and ignoring EDNS0.
-
-    The Problem: Modern DNS relies on EDNS0 to handle UDP packets larger than 512 bytes (like DNSSEC cryptographic signatures).
-
-    The Fix: Right now, stripping it works fine for basic web browsing. But if you want full RFC compliance, your fast-path should copy the EDNS0 OPT pseudosection from the original query into your response and adjust the UDP length accordingly, rather than wiping it.
-
-5. Multi-Threading and RSS (For Physical NICs)
-
-Since you are on a veth pipe right now, a single poll() thread is fine.
-
-    The Problem: If you ever deploy this to a physical server handling millions of requests per second, a single core will max out.
-
-    The Fix: Physical NICs use RSS (Receive Side Scaling) to hash incoming packets across multiple hardware queues. You would spawn one C++ thread per CPU core, bind one AF_XDP socket to each hardware queue, and process packets entirely lock-free across all cores simultaneously.
-
-6. Systemd Daemonization
-
-To make this permanent, you don't want to run sudo ip netns... manually after every reboot.
-Write a systemd service file (/etc/systemd/system/dns-accel.service) that executes a bash script on startup. The script should:
-
-    Rebuild the accel_ns namespace and veth pipe.
-
-    Apply the NAT iptables rules.
-
-    Launch your binary in the background.
-
-If you fix the IPv6 handling and the Dynamic TTL, you will have a production-grade caching resolver running faster than anything you could install via apt.
+TCP clients, IP fragments, IPv6 transport, VLANs and oversized frames currently
+use the kernel path. Keep a conventional resolver available on those paths.
+See README.md for the supported DNS semantics and deployment requirements.

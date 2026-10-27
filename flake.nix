@@ -12,7 +12,7 @@
       nixpkgs,
       flake-utils,
     }:
-    flake-utils.lib.eachDefaultSystem (
+    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (
       system:
       let
         pkgs = import nixpkgs { inherit system; };
@@ -25,15 +25,13 @@
             pkgs.pkg-config
             llvm.clang
             llvm.clang-unwrapped
-            llvm.libllvm
-            llvm.llvm # <-- Changed from bintools to the core llvm package
+            llvm.llvm
             pkgs.bpftools
           ];
 
           buildInputs = with pkgs; [
             libbpf
             xdp-tools
-            liburing
             linuxHeaders
             elfutils
             zlib
@@ -42,12 +40,18 @@
 
           shellHook = ''
             export CLANG="${llvm.clang-unwrapped}/bin/clang"
-            export LLVM_STRIP="${llvm.llvm}/bin/llvm-strip" # <-- Updated path
+            export LLVM_STRIP="${llvm.llvm}/bin/llvm-strip"
 
             mkdir -p include
             if [ ! -f include/vmlinux.h ]; then
               echo "Dumping host BTF to include/vmlinux.h..."
-              bpftool btf dump file /sys/kernel/btf/vmlinux format c > include/vmlinux.h 2>/dev/null || echo "Warning: BTF dump failed."
+              btf_header=$(mktemp include/vmlinux.h.XXXXXX)
+              if bpftool btf dump file /sys/kernel/btf/vmlinux format c > "$btf_header"; then
+                mv "$btf_header" include/vmlinux.h
+              else
+                rm -f "$btf_header"
+                echo "Warning: BTF dump failed."
+              fi
             fi
           '';
         };

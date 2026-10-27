@@ -1,270 +1,207 @@
 #pragma once
 
-#include <cstdint>
-#include <chrono>
+#include <algorithm>
+#include <array>
 #include <atomic>
-#include <string_view>
+#include <cerrno>
+#include <chrono>
+#include <cstdint>
 #include <cstring>
+#include <fcntl.h>
+#include <new>
+#include <pthread.h>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <sys/file.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include <fcntl.h>
 #include <unistd.h>
-#include <stdexcept>
-#include <new>
+#include <vector>
 
 namespace net_accel {
-
-// 64-bit FNV-1a hash algorithm evaluated at compile-time or run-time
-constexpr uint32_t fnv1a_32(std::string_view str) noexcept {
-    uint32_t hash = 2166136261u;
-    for (char c : str) {
-        hash ^= static_cast<uint8_t>(c);
-        hash *= 16777619u;
-    }
+inline uint64_t monotonic_ns() noexcept {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+inline uint64_t calculate_hash(std::span<const uint8_t> key) noexcept {
+    uint64_t hash = 14695981039346656037ULL;
+    for (uint8_t c : key) hash = (hash ^ c) * 1099511628211ULL;
     return hash;
 }
-struct alignas(64) AtomicCacheBucket {
-    std::atomic<uint32_t> domain_hash{0};
-    std::atomic<uint32_t> ipv4_addr{0};
-    uint8_t ipv6_addr[16]{0};
-    std::atomic<uint64_t> ttl_expiration{0}; // Standardized TTL expiration field
-    std::atomic<uint64_t> hit_count{0};      // Added for lookup metrics
-};
-inline uint32_t calculate_hash(std::string_view domain) {
-    uint32_t hash = 2166136261u; // FNV-1a
-    for (char c : domain) {
-        hash ^= static_cast<uint8_t>(c);
-        hash *= 16777619u;
-    }
-    return hash;
-}
-template<size_t Capacity = 131072> // Must be a power of two
-class SharedDnsTable {
-    static_assert((Capacity & (Capacity - 1)) == 0, "Capacity must be a power of 2");
 
-public:
-    struct TableHeader {
-        uint64_t magic_identifier;
-        uint32_t capacity;
-        std::atomic<uint64_t> total_queries;
-        std::atomic<uint64_t> cache_hits;
+// Set associative storage avoids deletion holes. Each set has one robust,
+// process-shared lock; readers copy a complete response while holding that lock.
+template<size_t Capacity = 4096>
+class alignas(64) SharedDnsTable {
+    static_assert(Capacity >= 16 && (Capacity & (Capacity - 1)) == 0);
+    static_assert(std::atomic<uint64_t>::is_always_lock_free, "shared metrics require lock-free atomics");
+    static constexpr size_t ways = 16;
+    static constexpr size_t max_key = 512;
+    static constexpr size_t max_response = 4096;
+    struct Entry {
+        uint64_t hash = 0;
+        uint64_t inserted_ns = 0;
+        uint64_t expires_ns = 0;
+        uint32_t key_size = 0;
+        uint32_t response_size = 0;
+        std::array<uint8_t, max_key> key{};
+        std::array<uint8_t, max_response> response{};
     };
-
-    static constexpr uint64_t SHM_MAGIC = 0x444E535F41434345ULL; // "DNS_ACCE"
-    static constexpr const char* SHM_PATH = "/net_accel_dns";
-
-    SharedDnsTable() = default;
-
-    // Create or attach to POSIX Shared Memory
-    static SharedDnsTable* create_or_attach(bool is_master = true) {
-        int shm_fd = ::shm_open(SHM_PATH, O_CREAT | O_RDWR, 0666);
-        if (shm_fd < 0) {
-            throw std::runtime_error("Failed to open POSIX Shared Memory");
-        }
-
-        size_t total_size = sizeof(TableHeader) + (sizeof(AtomicCacheBucket) * Capacity);
-
-        if (is_master) {
-            if (::ftruncate(shm_fd, total_size) < 0) {
-                ::close(shm_fd);
-                throw std::runtime_error("Failed to set Shared Memory size");
+    struct alignas(64) Set {
+        pthread_mutex_t mutex{};
+        std::array<Entry, ways> entries{};
+    };
+public:
+    static constexpr uint64_t SHM_MAGIC = 0x444e534143433032ULL;
+    static constexpr const char* SHM_PATH = "/net_accel_dns_v2";
+    struct alignas(64) TableHeader {
+        uint64_t magic_identifier = 0;
+        uint64_t capacity = Capacity;
+        uint64_t layout_size = sizeof(SharedDnsTable);
+        std::atomic<uint64_t> total_queries{0};
+        std::atomic<uint64_t> cache_hits{0};
+    };
+    SharedDnsTable() {
+        pthread_mutexattr_t attr;
+        if (pthread_mutexattr_init(&attr)) throw std::runtime_error("mutex attributes failed");
+        int err = pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
+        if (!err) err = pthread_mutexattr_setrobust(&attr, PTHREAD_MUTEX_ROBUST);
+        size_t initialized = 0;
+        if (!err) {
+            for (; initialized < sets_.size(); ++initialized) {
+                err = pthread_mutex_init(&sets_[initialized].mutex, &attr);
+                if (err) break;
             }
         }
-
-        void* addr = ::mmap(nullptr, total_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-        ::close(shm_fd);
-
-        if (addr == MAP_FAILED) {
-            throw std::runtime_error("mmap failed for Shared Memory");
+        pthread_mutexattr_destroy(&attr);
+        if (err) {
+            while (initialized) pthread_mutex_destroy(&sets_[--initialized].mutex);
+            throw std::runtime_error("process-shared mutex initialization failed");
         }
-
-        auto* table = new (addr) SharedDnsTable();
-        if (is_master) {
-            table->header()->magic_identifier = SHM_MAGIC;
-            table->header()->capacity = Capacity;
-            table->header()->total_queries.store(0, std::memory_order_relaxed);
-            table->header()->cache_hits.store(0, std::memory_order_relaxed);
-        }
-
-        return table;
+        header_.magic_identifier = SHM_MAGIC;
     }
-    // inside include/shared_dns_table.hpp (under public methods of SharedDnsTable)
-
-size_t sweep_expired() {
-    uint64_t now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()
-    ).count();
-
-    size_t evicted_count = 0;
-    auto* bucket_array = buckets();
-
-    for (size_t i = 0; i < Capacity; ++i) {
-        uint32_t current_hash = bucket_array[i].domain_hash.load(std::memory_order_relaxed);
-        if (current_hash == 0) continue;
-
-        uint64_t expiry = bucket_array[i].ttl_expiration.load(std::memory_order_relaxed);
-
-        if (expiry != 0 && expiry < now_ns) {
-            uint32_t expected = current_hash;
-            if (bucket_array[i].domain_hash.compare_exchange_strong(
-                    expected, 0, std::memory_order_acq_rel)) {
-                bucket_array[i].ttl_expiration.store(0, std::memory_order_relaxed);
-                bucket_array[i].ipv4_addr.store(0, std::memory_order_relaxed);
-                evicted_count++;
-            }
-        }
+    ~SharedDnsTable() {
+        for (auto& set : sets_) pthread_mutex_destroy(&set.mutex);
     }
-    return evicted_count;
-}
-    TableHeader* header() noexcept {
-        return reinterpret_cast<TableHeader*>(this);
-    }
+    SharedDnsTable(const SharedDnsTable&) = delete;
+    SharedDnsTable& operator=(const SharedDnsTable&) = delete;
 
-    AtomicCacheBucket* buckets() noexcept {
-        return reinterpret_cast<AtomicCacheBucket*>(
-            reinterpret_cast<uint8_t*>(this) + sizeof(TableHeader)
-        );
-    }
-
-    // Sub-50ns Lock-free lookup implementation
-    [[nodiscard]] bool lookup(std::string_view domain, uint32_t& out_ip, uint64_t current_time_ns) noexcept {
-        header()->total_queries.fetch_add(1, std::memory_order_relaxed);
-        uint32_t hash = fnv1a_32(domain);
-        if (hash == 0) hash = 1; // 0 reserved for empty bucket
-
-        uint32_t mask = Capacity - 1;
-        uint32_t idx = hash & mask;
-
-        for (size_t probe = 0; probe < 16; ++probe) {
-            uint32_t bucket_hash = buckets()[idx].domain_hash.load(std::memory_order_acquire);
-
-            if (bucket_hash == 0) {
-                return false; // Empty slot, cache miss
-            }
-
-            if (bucket_hash == hash) {
-                uint64_t exp = buckets()[idx].ttl_expiration.load(std::memory_order_relaxed);
-                if (current_time_ns > exp) {
-                    return false; // Record expired
+    static SharedDnsTable* create_or_attach(bool is_master = true, const char* path = SHM_PATH) {
+        int fd = ::shm_open(path, O_RDWR | O_CLOEXEC | (is_master ? O_CREAT : 0), 0600);
+        if (fd < 0) throw std::runtime_error("shm_open failed: " + std::string(std::strerror(errno)));
+        void* addr = MAP_FAILED;
+        try {
+            if (flock(fd, LOCK_EX)) throw std::runtime_error("shared cache initialization lock failed");
+            struct stat st{};
+            if (fstat(fd, &st)) throw std::runtime_error("shared cache fstat failed");
+            if (st.st_uid != geteuid() || (st.st_mode & 0077))
+                throw std::runtime_error("shared cache must be owned by this user and private (0600)");
+            bool fresh = st.st_size == 0 && is_master;
+            if (fresh && ftruncate(fd, sizeof(SharedDnsTable))) throw std::runtime_error("shared cache resize failed");
+            if (fresh) {
+                int error = posix_fallocate(fd, 0, sizeof(SharedDnsTable));
+                if (error) {
+                    std::string message = "shared cache allocation failed: " + std::string(std::strerror(error));
+                    if (ftruncate(fd, 0)) message += "; could not reset the incomplete cache size";
+                    throw std::runtime_error(message);
                 }
+            }
+            if (!fresh && st.st_size != static_cast<off_t>(sizeof(SharedDnsTable)))
+                throw std::runtime_error("incompatible shared cache size");
+            addr = mmap(nullptr, sizeof(SharedDnsTable), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+            if (addr == MAP_FAILED) throw std::runtime_error("shared cache mmap failed");
+            auto* table = static_cast<SharedDnsTable*>(addr);
+            if (fresh) table = new (addr) SharedDnsTable;
+            else if (table->header_.magic_identifier != SHM_MAGIC || table->header_.capacity != Capacity ||
+                     table->header_.layout_size != sizeof(SharedDnsTable))
+                throw std::runtime_error("incompatible shared cache version");
+            flock(fd, LOCK_UN);
+            close(fd);
+            return table;
+        } catch (...) {
+            if (addr != MAP_FAILED) munmap(addr, sizeof(SharedDnsTable));
+            close(fd);
+            throw;
+        }
+    }
+    static void unmap(SharedDnsTable* table) noexcept { if (table) munmap(table, sizeof(SharedDnsTable)); }
+    TableHeader* header() noexcept { return &header_; }
 
-                out_ip = buckets()[idx].ipv4_addr.load(std::memory_order_relaxed);
-                buckets()[idx].hit_count.fetch_add(1, std::memory_order_relaxed);
-                header()->cache_hits.fetch_add(1, std::memory_order_relaxed);
+    bool lookup(std::span<const uint8_t> key, std::vector<uint8_t>& response,
+                uint64_t now_ns, uint32_t& age_seconds) {
+        header_.total_queries.fetch_add(1, std::memory_order_relaxed);
+        if (key.empty() || key.size() > max_key) return false;
+        uint64_t hash = calculate_hash(key);
+        auto& set = sets_[hash & (sets_.size() - 1)];
+        Guard lock(set);
+        for (auto& entry : set.entries) {
+            if (matches(entry, key, hash) && entry.response_size >= 12 && entry.response_size <= max_response &&
+                now_ns >= entry.inserted_ns && now_ns < entry.expires_ns) {
+                response.assign(entry.response.begin(), entry.response.begin() + entry.response_size);
+                age_seconds = static_cast<uint32_t>((now_ns - entry.inserted_ns) / 1000000000ULL);
+                header_.cache_hits.fetch_add(1, std::memory_order_relaxed);
                 return true;
             }
-
-            idx = (idx + 1) & mask;
         }
-
         return false;
     }
-
-    // Sub-50ns Lock-free IPv6 lookup implementation
-    [[nodiscard]] bool lookup_ipv6(std::string_view domain, uint8_t* out_ipv6, uint64_t current_time_ns) noexcept {
-        header()->total_queries.fetch_add(1, std::memory_order_relaxed);
-        uint32_t hash = fnv1a_32(domain);
-        if (hash == 0) hash = 1;
-
-        uint32_t mask = Capacity - 1;
-        uint32_t idx = hash & mask;
-
-        for (size_t probe = 0; probe < 16; ++probe) {
-            uint32_t bucket_hash = buckets()[idx].domain_hash.load(std::memory_order_acquire);
-
-            if (bucket_hash == 0) {
-                return false; // Empty slot, cache miss
-            }
-
-            if (bucket_hash == hash) {
-                    uint64_t exp = buckets()[idx].ttl_expiration.load(std::memory_order_relaxed);
-                    if (exp == 0 || current_time_ns > exp) {
-                    return false; // Never populated or expired
+    bool insert(std::span<const uint8_t> key, std::span<const uint8_t> response,
+                uint32_t ttl_seconds, uint64_t now_ns) {
+        if (key.empty() || key.size() > max_key || response.size() < 12 ||
+            response.size() > max_response || ttl_seconds == 0 || ttl_seconds > 0x7fffffffU) return false;
+        uint64_t hash = calculate_hash(key);
+        auto& set = sets_[hash & (sets_.size() - 1)];
+        Guard lock(set);
+        Entry* selected = nullptr;
+        for (auto& entry : set.entries) {
+            if (matches(entry, key, hash)) { selected = &entry; break; }
+            if (!selected || entry.expires_ns < selected->expires_ns) selected = &entry;
+        }
+        selected->key_size = 0;
+        selected->hash = hash;
+        selected->inserted_ns = now_ns;
+        uint64_t duration = uint64_t(ttl_seconds) * 1000000000ULL;
+        selected->expires_ns = now_ns > UINT64_MAX - duration ? UINT64_MAX : now_ns + duration;
+        selected->response_size = static_cast<uint32_t>(response.size());
+        std::copy(key.begin(), key.end(), selected->key.begin());
+        std::copy(response.begin(), response.end(), selected->response.begin());
+        selected->key_size = static_cast<uint32_t>(key.size());
+        return true;
+    }
+    size_t sweep_expired(uint64_t now_ns = monotonic_ns()) {
+        size_t count = 0;
+        for (auto& set : sets_) {
+            Guard lock(set);
+            for (auto& entry : set.entries) {
+                if (entry.key_size && entry.expires_ns <= now_ns) {
+                    entry.key_size = 0;
+                    entry.expires_ns = 0;
+                    ++count;
                 }
-
-                std::memcpy(out_ipv6, buckets()[idx].ipv6_addr, 16);
-                buckets()[idx].hit_count.fetch_add(1, std::memory_order_relaxed);
-                header()->cache_hits.fetch_add(1, std::memory_order_relaxed);
-                return true;
             }
-
-            idx = (idx + 1) & mask;
         }
-
-        return false;
+        return count;
     }
-
-    // Atomic IPv4 Insertion / Update
-void insert(std::string_view domain, uint32_t ipv4_addr, uint64_t ttl_expiration_ns) {
-    uint32_t hash = calculate_hash(domain); // Removed 'this->'
-    if (hash == 0) hash = 1;
-
-    size_t base_idx = hash % Capacity;
-    size_t oldest_idx = base_idx;
-    uint64_t oldest_ttl = UINT64_MAX;
-
-    for (size_t probe = 0; probe < 16; ++probe) {
-        size_t idx = (base_idx + probe) % Capacity;
-        uint32_t slot_hash = buckets()[idx].domain_hash.load(std::memory_order_acquire);
-
-        if (slot_hash == 0 || slot_hash == hash) {
-            buckets()[idx].ipv4_addr.store(ipv4_addr, std::memory_order_relaxed);
-            buckets()[idx].ttl_expiration.store(ttl_expiration_ns, std::memory_order_relaxed);
-            buckets()[idx].domain_hash.store(hash, std::memory_order_release);
-            return;
-        }
-
-        uint64_t slot_ttl = buckets()[idx].ttl_expiration.load(std::memory_order_relaxed);
-        if (slot_ttl < oldest_ttl) {
-            oldest_ttl = slot_ttl;
-            oldest_idx = idx;
-        }
-    }
-
-    // Fallback eviction
-    buckets()[oldest_idx].domain_hash.store(0, std::memory_order_release);
-    buckets()[oldest_idx].ipv4_addr.store(ipv4_addr, std::memory_order_relaxed);
-    buckets()[oldest_idx].ttl_expiration.store(ttl_expiration_ns, std::memory_order_relaxed);
-    buckets()[oldest_idx].domain_hash.store(hash, std::memory_order_release);
-}
-
-    // Atomic IPv6 Insertion / Update
-    void insert_ipv6(std::string_view domain, const uint8_t ipv6_addr_in[16], uint64_t ttl_expiration_ns) {
-    uint32_t hash = calculate_hash(domain); // Removed 'this->'
-    if (hash == 0) hash = 1;
-
-    size_t base_idx = hash % Capacity;
-    size_t oldest_idx = base_idx;
-    uint64_t oldest_ttl = UINT64_MAX;
-
-    for (size_t probe = 0; probe < 16; ++probe) {
-        size_t idx = (base_idx + probe) % Capacity;
-        uint32_t slot_hash = buckets()[idx].domain_hash.load(std::memory_order_acquire);
-
-        if (slot_hash == 0 || slot_hash == hash) {
-            if (slot_hash == hash) {
-                buckets()[idx].domain_hash.store(0, std::memory_order_release);
+private:
+    struct Guard {
+        Set& set;
+        explicit Guard(Set& value) : set(value) {
+            int err = pthread_mutex_lock(&set.mutex);
+            if (err == EOWNERDEAD) {
+                for (auto& entry : set.entries) { entry.key_size = 0; entry.expires_ns = 0; }
+                err = pthread_mutex_consistent(&set.mutex);
+                if (err) pthread_mutex_unlock(&set.mutex);
             }
-            std::memcpy(buckets()[idx].ipv6_addr, ipv6_addr_in, 16);
-            buckets()[idx].ttl_expiration.store(ttl_expiration_ns, std::memory_order_relaxed);
-            buckets()[idx].domain_hash.store(hash, std::memory_order_release);
-            return;
+            if (err) throw std::runtime_error("shared cache lock failed");
         }
-
-        uint64_t slot_ttl = buckets()[idx].ttl_expiration.load(std::memory_order_relaxed);
-        if (slot_ttl < oldest_ttl) {
-            oldest_ttl = slot_ttl;
-            oldest_idx = idx;
-        }
+        ~Guard() { pthread_mutex_unlock(&set.mutex); }
+    };
+    static bool matches(const Entry& entry, std::span<const uint8_t> key, uint64_t hash) {
+        return entry.key_size == key.size() && entry.hash == hash &&
+               std::equal(key.begin(), key.end(), entry.key.begin());
     }
-
-    // Fallback eviction
-    buckets()[oldest_idx].domain_hash.store(0, std::memory_order_release);
-    std::memcpy(buckets()[oldest_idx].ipv6_addr, ipv6_addr_in, 16);
-    buckets()[oldest_idx].ttl_expiration.store(ttl_expiration_ns, std::memory_order_relaxed);
-    buckets()[oldest_idx].domain_hash.store(hash, std::memory_order_release);
-}
-    
-   };
-
+    TableHeader header_{};
+    std::array<Set, Capacity / ways> sets_{};
+};
 } // namespace net_accel

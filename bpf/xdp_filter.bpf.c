@@ -17,7 +17,7 @@ struct {
     __type(value, __u8);  // Status flag (1 = blocked)
 } ip_blocklist SEC(".maps");
 
-// BPF Map: AF_XDP Socket Ring Map for zero-copy redirection
+// BPF Map: AF_XDP sockets (the daemon explicitly selects copy mode).
 struct {
     __uint(type, BPF_MAP_TYPE_XSKMAP);
     __uint(max_entries, 64);
@@ -53,10 +53,20 @@ int xdp_dns_accelerator(struct xdp_md *ctx) {
     if (eth->h_proto != bpf_htons(ETH_P_IP)) {
         return XDP_PASS;
     }
+    if ((__u64)((__u8 *)data_end - (__u8 *)data) > DNS_MAX_PACKET_SIZE) {
+        return XDP_PASS;
+    }
 
     // 2. Parse IPv4 Header
     struct iphdr *iph = (void *)(eth + 1);
     if ((void *)(iph + 1) > data_end) {
+        return XDP_PASS;
+    }
+
+    __u32 ihl = (__u32)iph->ihl * 4;
+    __u32 ip_len = bpf_ntohs(iph->tot_len);
+    if (iph->version != 4 || ihl < sizeof(*iph) || ip_len < ihl ||
+        (void *)((__u8 *)iph + ip_len) > data_end) {
         return XDP_PASS;
     }
 
@@ -70,13 +80,20 @@ int xdp_dns_accelerator(struct xdp_md *ctx) {
         return XDP_DROP;
     }
 
-    if (iph->protocol != IPPROTO_UDP) {
+    // Fragments belong to the kernel's reassembly path, including fragment zero.
+    if (iph->protocol != IPPROTO_UDP || (bpf_ntohs(iph->frag_off) & 0x3fff) ||
+        ip_len < ihl + sizeof(struct udphdr)) {
         return XDP_PASS;
     }
 
-// 3. Parse UDP Header
-    struct udphdr *udph = (void *)((__u8 *)iph + (iph->ihl * 4));
+    // 3. Parse UDP Header
+    struct udphdr *udph = (void *)((__u8 *)iph + ihl);
     if ((void *)(udph + 1) > data_end) {
+        return XDP_PASS;
+    }
+    __u32 udp_len = bpf_ntohs(udph->len);
+    if (udp_len < sizeof(*udph) + 12 || udp_len > ip_len - ihl ||
+        (void *)((__u8 *)udph + udp_len) > data_end) {
         return XDP_PASS;
     }
 

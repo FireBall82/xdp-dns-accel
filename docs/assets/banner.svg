@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title description">
+  <title id="title">XDP DNS Accelerator</title>
+  <desc id="description">A dark blue banner showing DNS packets flowing through XDP into a shared cache and upstream resolver.</desc>
+  <defs>
+    <linearGradient id="background" x2="1" y2="1">
+      <stop stop-color="#081322"/>
+      <stop offset="1" stop-color="#122741"/>
+    </linearGradient>
+    <linearGradient id="accent" x2="1" y2="0">
+      <stop stop-color="#56e0d3"/>
+      <stop offset="1" stop-color="#83afff"/>
+    </linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#a6c8f5" stroke-opacity=".045"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="360" rx="20" fill="url(#background)"/>
+  <rect width="1200" height="360" rx="20" fill="url(#grid)"/>
+  <path d="M0 359H1200" stroke="url(#accent)" stroke-width="3"/>
+  <circle cx="1120" cy="32" r="210" fill="#568dff" opacity=".045"/>
+  <g font-family="Inter, Segoe UI, Arial, sans-serif">
+    <text x="64" y="72" fill="#66ded7" font-size="12" font-weight="700" letter-spacing="3">LINUX · XDP · AF_XDP</text>
+    <text x="60" y="143" fill="#f1f6ff" font-size="51" font-weight="750" letter-spacing="-1.5">DNS, at the</text>
+    <text x="60" y="204" fill="#f1f6ff" font-size="51" font-weight="750" letter-spacing="-1.5">packet boundary.</text>
+    <text x="64" y="248" fill="#a6bad3" font-size="17">Complete answers. Shared cache. Bounded workers.</text>
+    <rect x="64" y="278" width="139" height="28" rx="14" fill="#1d364b"/>
+    <text x="80" y="297" fill="#8ce9dd" font-size="11" font-weight="650" letter-spacing="1">C++20 / COPY MODE</text>
+  </g>
+  <g fill="none" stroke="#406080" stroke-width="2">
+    <path d="M640 180H710"/>
+    <path d="M834 180H884V116H930"/>
+    <path d="M884 180V250H930" stroke-dasharray="5 6"/>
+  </g>
+  <g fill="#65dfd5">
+    <circle cx="674" cy="180" r="4"/>
+    <circle cx="884" cy="148" r="4"/>
+  </g>
+  <g font-family="Inter, Segoe UI, Arial, sans-serif" text-anchor="middle">
+    <rect x="563" y="151" width="78" height="58" rx="12" fill="#10263b" stroke="#385471"/>
+    <path d="M585 171h29m-29 9h20m-20 9h25" stroke="#88b9fa" stroke-width="2" stroke-linecap="round"/>
+    <text x="602" y="237" fill="#a6bad3" font-size="12">DNS QUERY</text>
+    <rect x="711" y="127" width="124" height="106" rx="18" fill="#143744" stroke="#59cabc" stroke-opacity=".8"/>
+    <text x="773" y="172" fill="#9bf3e4" font-size="27" font-weight="750">XDP</text>
+    <text x="773" y="198" fill="#9bbec6" font-size="12">AF_XDP socket</text>
+    <rect x="931" y="78" width="196" height="76" rx="14" fill="#142c41" stroke="#3e6b82"/>
+    <circle cx="954" cy="102" r="3" fill="#65dfd5"/>
+    <text x="1031" y="111" fill="#e2f4fa" font-size="16" font-weight="650">Shared cache</text>
+    <text x="1029" y="134" fill="#8eaac5" font-size="12">Full responses · aging TTLs</text>
+    <rect x="931" y="212" width="196" height="76" rx="14" fill="#182b48" stroke="#466291"/>
+    <circle cx="954" cy="236" r="3" fill="#93afff"/>
+    <text x="1032" y="245" fill="#e2ebff" font-size="16" font-weight="650">Upstream workers</text>
+    <text x="1029" y="268" fill="#91a9ca" font-size="12">UDP · TCP fallback</text>
+    <text x="890" y="101" fill="#65dfd5" font-size="10" font-weight="700" letter-spacing="1">HIT</text>
+    <text x="886" y="277" fill="#93afff" font-size="10" font-weight="700" letter-spacing="1">MISS</text>
+  </g>
+</svg>

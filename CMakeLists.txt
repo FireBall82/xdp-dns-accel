@@ -1,59 +1,61 @@
 cmake_minimum_required(VERSION 3.20)
-project(net_accel_dns C CXX)
-
+project(net_accel_dns VERSION 0.2.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-# Removed -march=native to keep Nix happy
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -Wall -Wextra")
-
+set(CMAKE_CXX_EXTENSIONS OFF)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
+endif()
+option(ENABLE_SANITIZERS "Enable address and undefined behavior sanitizers" OFF)
+find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(LIBBPF REQUIRED libbpf)
-pkg_check_modules(LIBXDP REQUIRED libxdp)
-pkg_check_modules(LIBURING REQUIRED liburing)
+pkg_check_modules(LIBBPF REQUIRED IMPORTED_TARGET libbpf)
+pkg_check_modules(LIBXDP REQUIRED IMPORTED_TARGET libxdp)
+# Explicit CMake settings take precedence over the development-shell defaults.
+if(NOT DEFINED BPF_CLANG AND DEFINED ENV{CLANG} AND EXISTS "$ENV{CLANG}")
+    set(BPF_CLANG "$ENV{CLANG}" CACHE FILEPATH "Clang executable with BPF support")
+endif()
+find_program(BPF_CLANG NAMES clang)
+if(NOT DEFINED BPF_STRIP AND DEFINED ENV{LLVM_STRIP} AND EXISTS "$ENV{LLVM_STRIP}")
+    set(BPF_STRIP "$ENV{LLVM_STRIP}" CACHE FILEPATH "LLVM strip executable")
+endif()
+find_program(BPF_STRIP NAMES llvm-strip)
+if(NOT BPF_CLANG OR NOT BPF_STRIP)
+    message(FATAL_ERROR "clang with the BPF target and llvm-strip are required")
+endif()
+set(BPF_SRC "${CMAKE_CURRENT_SOURCE_DIR}/bpf/xdp_filter.bpf.c")
+set(BPF_OBJ "${CMAKE_CURRENT_BINARY_DIR}/xdp_filter.bpf.o")
+add_custom_command(OUTPUT "${BPF_OBJ}"
+    COMMAND ${CMAKE_COMMAND} -E env HARDENING_DISABLE=all "${BPF_CLANG}" -g -O2 -target bpf
+            -Wall -Wextra -I${CMAKE_CURRENT_SOURCE_DIR}/include ${LIBBPF_CFLAGS}
+            -c "${BPF_SRC}" -o "${BPF_OBJ}"
+    COMMAND "${BPF_STRIP}" -g "${BPF_OBJ}"
+    DEPENDS "${BPF_SRC}" include/common_structs.h include/vmlinux.h
+    VERBATIM COMMENT "Building DNS XDP program")
+add_custom_target(bpf_target ALL DEPENDS "${BPF_OBJ}")
 
-include_directories(
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${LIBBPF_INCLUDE_DIRS}
-    ${LIBXDP_INCLUDE_DIRS}
-    ${LIBURING_INCLUDE_DIRS}
-)
-
-set(BPF_SRC ${CMAKE_CURRENT_SOURCE_DIR}/bpf/xdp_filter.bpf.c)
-set(BPF_OBJ ${CMAKE_CURRENT_BINARY_DIR}/xdp_filter.bpf.o)
-
-# Added `env HARDENING_DISABLE=all` to prevent Nix from injecting x86_64 hardening flags into the bpf compiler
-add_custom_command(
-    OUTPUT ${BPF_OBJ}
-    COMMAND env HARDENING_DISABLE=all $ENV{CLANG} -g -O2 -target bpf 
-            -D__TARGET_ARCH_x86 
-            -I${CMAKE_CURRENT_SOURCE_DIR}/include 
-            ${LIBBPF_CFLAGS}
-            -c ${BPF_SRC} -o ${BPF_OBJ}
-    COMMAND $ENV{LLVM_STRIP} -g ${BPF_OBJ}
-    DEPENDS ${BPF_SRC}
-    COMMENT "Building eBPF object ${BPF_OBJ}"
-)
-
-add_custom_target(bpf_target ALL DEPENDS ${BPF_OBJ})
-
-# Build the C++ daemon
+add_library(dns_core src/dns_protocol.cpp src/upstream.cpp src/resolver_service.cpp)
+target_include_directories(dns_core PUBLIC include)
+target_link_libraries(dns_core PUBLIC Threads::Threads rt)
+target_compile_options(dns_core PRIVATE -Wall -Wextra -Wpedantic)
+if(ENABLE_SANITIZERS)
+    target_compile_options(dns_core PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(dns_core PUBLIC -fsanitize=address,undefined)
+endif()
 add_executable(dns_daemon src/main.cpp)
+target_link_libraries(dns_daemon PRIVATE dns_core PkgConfig::LIBBPF PkgConfig::LIBXDP)
+target_compile_options(dns_daemon PRIVATE -Wall -Wextra -Wpedantic)
+add_dependencies(dns_daemon bpf_target)
 
-# Explicitly tell the daemon where to find shared_dns_table.hpp
-target_include_directories(dns_daemon PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-
-# Link everything
-target_link_libraries(dns_daemon
-    PRIVATE
-    ${LIBBPF_LIBRARIES}
-    ${LIBXDP_LIBRARIES}
-    ${LIBURING_LIBRARIES}
-    pthread
-    rt
-)
-
-target_link_directories(dns_daemon PRIVATE 
-    ${LIBBPF_LIBRARY_DIRS}
-    ${LIBXDP_LIBRARY_DIRS}
-    ${LIBURING_LIBRARY_DIRS}
-)
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(dns_tests tests/dns_tests.cpp)
+    target_link_libraries(dns_tests PRIVATE dns_core PkgConfig::LIBXDP)
+    target_compile_options(dns_tests PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME dns_regressions COMMAND dns_tests)
+    add_test(NAME dns_network_regressions COMMAND dns_tests --network)
+    set_tests_properties(dns_regressions dns_network_regressions PROPERTIES TIMEOUT 30)
+endif()
+include(GNUInstallDirs)
+install(TARGETS dns_daemon RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES "${BPF_OBJ}" DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/net_accel_dns)
