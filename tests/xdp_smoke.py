@@ -103,7 +103,7 @@ def client():
     print("XDP A/AAAA/TXT, cache, NXDOMAIN, NODATA and zero-TTL packets passed")
 
 
-def smoke(daemon):
+def smoke(daemon, xdp_mode="generic"):
     if os.geteuid() != 0:
         raise SystemExit("Run this smoke test with sudo; it creates only temporary namespaces and a veth pair.")
     daemon = str(Path(daemon).resolve(strict=True))
@@ -142,7 +142,8 @@ def smoke(daemon):
                     raise RuntimeError("mock DNS server did not start")
                 time.sleep(0.02)
             process = subprocess.Popen(["ip", "netns", "exec", server_ns, daemon, server_if,
-                                        "--upstream", "127.0.0.1:15353", "--cache-name", cache], stdout=log, stderr=log)
+                                        "--upstream", "127.0.0.1:15353", "--cache-name", cache,
+                                        "--xdp-mode", xdp_mode, "--xsk-mode", "copy"], stdout=log, stderr=log)
             try:
                 run("ip", "netns", "exec", client_ns, sys.executable, script, "--client")
                 process.send_signal(signal.SIGTERM)
@@ -152,7 +153,8 @@ def smoke(daemon):
                 output = log.read()
                 print(output, end="")
                 assert re.search(r"hits=[1-9][0-9]*", output), "no cache hit observed"
-                # The generic hook must have been removed on graceful shutdown.
+                assert f"XDP={xdp_mode} AF_XDP=copy" in output, "mode not verified"
+                # The selected hook must have been removed on graceful shutdown.
                 link = subprocess.check_output(["ip", "-n", server_ns, "-details", "link", "show", "dev", server_if], text=True)
                 assert "prog/xdp" not in link, "XDP program left attached"
             except Exception:
@@ -184,8 +186,8 @@ if __name__ == "__main__":
         mock_upstream()
     elif len(sys.argv) == 2 and sys.argv[1] == "--client":
         client()
-    elif len(sys.argv) == 2:
-        smoke(sys.argv[1])
+    elif len(sys.argv) in (2, 3) and (len(sys.argv) == 2 or sys.argv[2] in ("generic", "native")):
+        smoke(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else "generic")
     else:
-        raise SystemExit("Usage: sudo python3 tests/xdp_smoke.py /path/to/dns_daemon\n"
+        raise SystemExit("Usage: sudo python3 tests/xdp_smoke.py /path/to/dns_daemon [generic|native]\n"
                          "       sudo python3 tests/xdp_smoke.py --disable-tx-checksum INTERFACE")

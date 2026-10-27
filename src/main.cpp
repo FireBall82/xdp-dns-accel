@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <iostream>
 #include <linux/if_link.h>
+#include <linux/if_xdp.h>
 #include <memory>
 #include <net/if.h>
 #include <poll.h>
@@ -54,11 +55,14 @@ struct Options {
     std::filesystem::path bpf;
     unsigned workers = 4;
     unsigned queue = 0;
+    bool native = false;
+    bool zero_copy = false;
 };
 void usage(const char* executable) {
     std::cout << "Usage: " << executable << " <interface> [--upstream IPv4[:port]] [--workers 1..64]\n"
                  "       [--queue 0..63] [--bpf-object path] [--cache-name /name]\n"
-                 "Runs generic XDP with AF_XDP copy mode on the selected receive queue.\n";
+                 "       [--xdp-mode generic|native] [--xsk-mode copy|zero-copy]\n"
+                 "Defaults to generic XDP and AF_XDP copy; zero-copy requires native XDP.\n";
 }
 Options options(int argc, char** argv) {
     if (argc < 2) throw std::invalid_argument("an interface is required (see --help)");
@@ -72,7 +76,15 @@ Options options(int argc, char** argv) {
             result.workers = number(argv[i + 1], 64);
             if (!result.workers) throw std::invalid_argument("at least one worker is required");
         } else if (option == "--queue") result.queue = number(argv[i + 1], 63);
-        else if (option == "--bpf-object") result.bpf = argv[i + 1];
+        else if (option == "--xdp-mode") {
+            std::string_view mode = argv[i + 1];
+            if (mode != "generic" && mode != "native") throw std::invalid_argument("XDP mode must be generic or native");
+            result.native = mode == "native";
+        } else if (option == "--xsk-mode") {
+            std::string_view mode = argv[i + 1];
+            if (mode != "copy" && mode != "zero-copy") throw std::invalid_argument("XSK mode must be copy or zero-copy");
+            result.zero_copy = mode == "zero-copy";
+        } else if (option == "--bpf-object") result.bpf = argv[i + 1];
         else if (option == "--cache-name") {
             result.cache_name = argv[i + 1];
             if (result.cache_name.size() < 2 || result.cache_name.size() > 240 || result.cache_name[0] != '/' ||
@@ -81,6 +93,7 @@ Options options(int argc, char** argv) {
         }
         else throw std::invalid_argument("unknown option: " + std::string(option));
     }
+    if (result.zero_copy && !result.native) throw std::invalid_argument("zero-copy requires --xdp-mode native");
     if (result.bpf.empty()) result.bpf = default_bpf_path();
     return result;
 }
@@ -100,6 +113,8 @@ public:
     uint32_t queue = 0;
     bool mapped = false;
     bool attached = false;
+    uint32_t xdp_flags = XDP_FLAGS_SKB_MODE;
+    bool zero_copy = false;
     size_t maximum_dns = 1232;
 
     ~Runtime() {
@@ -108,7 +123,7 @@ public:
             bpf_xdp_attach_opts opts{};
             opts.sz = sizeof(opts);
             opts.old_prog_fd = program_fd;
-            int result = bpf_xdp_detach(ifindex, XDP_FLAGS_SKB_MODE, &opts);
+            int result = bpf_xdp_detach(ifindex, xdp_flags, &opts);
             if (result) std::cerr << "Could not detach owned XDP hook: " << std::strerror(-result) << '\n';
         }
         if (socket) xsk_socket__delete(socket);
@@ -119,6 +134,7 @@ public:
     }
     void initialize(const Options& opts) {
         queue = opts.queue;
+        xdp_flags = opts.native ? XDP_FLAGS_DRV_MODE : XDP_FLAGS_SKB_MODE;
         ifindex = static_cast<int>(if_nametoindex(opts.interface.c_str()));
         if (!ifindex) throw std::invalid_argument("interface not found: " + opts.interface);
         int control = ::socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
@@ -151,16 +167,22 @@ public:
         socket_config.rx_size = rx_frames;
         socket_config.tx_size = num_frames - rx_frames;
         socket_config.libxdp_flags = XSK_LIBXDP_FLAGS__INHIBIT_PROG_LOAD;
-        socket_config.xdp_flags = XDP_FLAGS_SKB_MODE;
-        socket_config.bind_flags = XDP_COPY;
+        socket_config.xdp_flags = xdp_flags;
+        socket_config.bind_flags = opts.zero_copy ? XDP_ZEROCOPY : XDP_COPY;
         check(xsk_socket__create(&socket, opts.interface.c_str(), queue, umem, &rx, &tx, &socket_config), "create AF_XDP socket");
         int fd = xsk_socket__fd(socket);
+        xdp_options actual{};
+        socklen_t length = sizeof(actual);
+        if (getsockopt(fd, SOL_XDP, XDP_OPTIONS, &actual, &length) || length != sizeof(actual))
+            throw std::runtime_error("cannot verify AF_XDP socket mode");
+        zero_copy = actual.flags & XDP_OPTIONS_ZEROCOPY;
+        if (zero_copy != opts.zero_copy) throw std::runtime_error("AF_XDP socket mode differs from requested mode");
         if (bpf_map_update_elem(map_fd, &queue, &fd, BPF_ANY)) throw std::runtime_error("populate XSK map failed");
         mapped = true;
     }
     void attach() {
         // Refuse to replace another program, including a second daemon instance.
-        check(bpf_xdp_attach(ifindex, program_fd, XDP_FLAGS_SKB_MODE | XDP_FLAGS_UPDATE_IF_NOEXIST, nullptr), "attach XDP program");
+        check(bpf_xdp_attach(ifindex, program_fd, xdp_flags | XDP_FLAGS_UPDATE_IF_NOEXIST, nullptr), "attach XDP program");
         attached = true;
     }
 };
@@ -174,7 +196,8 @@ void event_loop(Runtime& runtime, ResolverService& service, SharedDnsTable<>& ca
     if (refill_frames(runtime.fill, recycle) != rx_frames) throw std::runtime_error("initial fill ring reservation failed");
     runtime.attach();
     std::cout << "DNS accelerator ready: XDP attached, AF_XDP queue " << runtime.queue
-              << ", RX fill ring populated\n" << std::flush;
+              << ", RX fill ring populated; XDP=" << (runtime.xdp_flags == XDP_FLAGS_DRV_MODE ? "native" : "generic")
+              << " AF_XDP=" << (runtime.zero_copy ? "zero-copy" : "copy") << "\n" << std::flush;
     uint64_t next_sweep = monotonic_ns() + 60000000000ULL;
     size_t inflight = 0;
     bool active = true;
@@ -268,7 +291,8 @@ int main(int argc, char** argv) {
             while (write(runtime.notify, &value, sizeof(value)) < 0 && errno == EINTR) {}
         });
         std::cout << "Interface=" << opts.interface << " upstream=" << opts.upstream
-                  << " workers=" << opts.workers << " (XDP copy mode)\n";
+                  << " workers=" << opts.workers << " XDP=" << (opts.native ? "native" : "generic")
+                  << " AF_XDP=" << (runtime.zero_copy ? "zero-copy" : "copy") << "\n";
         event_loop(runtime, service, *cache);
         std::cout << "Queries=" << service.metrics.received << " hits=" << service.metrics.hits
                   << " forwarded=" << service.metrics.forwarded << " failures=" << service.metrics.failures

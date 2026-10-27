@@ -1,7 +1,8 @@
 Future work
 ===========
 
-- Native XDP and hardware zero-copy as explicit, benchmarked modes.
+- Benchmark the implemented explicit native XDP and hardware zero-copy modes
+  on a supported NIC; retain comparative results and hardware configuration.
 - Multiple AF_XDP receive queues with per-queue event loops and RSS coverage.
 - Optional acceleration of IPv6 transport and VLAN-tagged frames.
 - A deployment-specific systemd unit and namespace setup, once interface names,

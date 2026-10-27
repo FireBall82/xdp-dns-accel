@@ -13,7 +13,7 @@
   <img alt="Platform: Linux" src="https://img.shields.io/badge/platform-Linux-182b48?style=flat-square&amp;logo=linux&amp;logoColor=white">
   <img alt="Language: C++20" src="https://img.shields.io/badge/language-C%2B%2B20-174b67?style=flat-square&amp;logo=cplusplus&amp;logoColor=white">
   <img alt="Packet path: XDP and AF_XDP" src="https://img.shields.io/badge/packet_path-XDP_%2B_AF__XDP-16534e?style=flat-square">
-  <img alt="Current mode: copy" src="https://img.shields.io/badge/current_mode-copy-384868?style=flat-square">
+  <img alt="Default mode: copy" src="https://img.shields.io/badge/default_mode-copy-384868?style=flat-square">
 </p>
 
 <p align="center">
@@ -40,9 +40,10 @@ fallback when the upstream truncates a UDP reply.
 | **Bounded work** | A configurable worker pool and bounded queues keep memory use under control. |
 | **Checked packet paths** | Validate packet lengths, checksums, upstream identity, and response questions. |
 
-> **Current scope:** generic (SKB) XDP with **AF_XDP copy mode**, one receive
-> queue per daemon. This accelerates IPv4 UDP DNS; it is not a standalone
-> recursive resolver. Hardware zero-copy and throughput numbers are not claimed.
+> **Default:** generic (SKB) XDP with **AF_XDP copy mode**, one receive
+> queue per daemon. Explicit native XDP and AF_XDP zero-copy modes are available.
+> This accelerates IPv4 UDP DNS; it is not a standalone recursive resolver.
+> Hardware zero-copy validation and comparative performance measurements remain pending.
 
 ## Build
 
@@ -145,6 +146,10 @@ nix shell nixpkgs#bind.dnsutils
 ```fish
 function dnsdig
     set -l dig_bin (command -v dig)
+    if test -z "$dig_bin"
+        echo "dig is missing; run: nix shell nixpkgs#bind.dnsutils" >&2
+        return 127
+    end
     sudo ip netns exec dns-client "$dig_bin" \
         @192.0.2.1 $argv +nocookie +ignore +tries=1 +time=3
 end
@@ -157,6 +162,10 @@ end
 dnsdig() {
     local dig_bin
     dig_bin="$(command -v dig)"
+    if [ -z "$dig_bin" ]; then
+        echo "dig is missing; run: nix shell nixpkgs#bind.dnsutils" >&2
+        return 127
+    fi
     sudo ip netns exec dns-client "$dig_bin" \
         @192.0.2.1 "$@" +nocookie +ignore +tries=1 +time=3
 }
@@ -259,6 +268,8 @@ dns_daemon <interface>
   [--upstream IPv4[:port]]
   [--workers 1..64]
   [--queue 0..63]
+  [--xdp-mode generic|native]
+  [--xsk-mode copy|zero-copy]
   [--bpf-object path]
   [--cache-name /name]
 ```
@@ -268,6 +279,8 @@ dns_daemon <interface>
 | `interface` | Required | Interface whose selected RX queue receives DNS queries. |
 | `--upstream` | `1.1.1.1:53` | Upstream resolver and optional port. |
 | `--workers` | `4` | Concurrent upstream requests, not additional NIC queues. |
+| `--xdp-mode` | `generic` | Select SKB or native driver XDP; no automatic fallback. |
+| `--xsk-mode` | `copy` | Force copy or zero-copy; zero-copy requires native XDP. |
 | `--queue` | `0` | AF_XDP receive queue; other queues pass to the kernel. |
 | `--bpf-object` | Auto-discovered | Override the adjacent or installed BPF object. |
 | `--cache-name` | `/net_accel_dns_v2` | Use a separate private shared cache. |
@@ -281,6 +294,47 @@ Loading BPF and configuring AF_XDP require suitable kernel privileges. Root is
 the straightforward development setup. The kernel must support generic XDP,
 BPF, AF_XDP, and XSK maps. Existing XDP programs are never replaced; graceful
 shutdown detaches only the hook owned by this process.
+
+### Native XDP and zero-copy
+
+```sh
+sudo ./build/dns_daemon eth0 --xdp-mode native --xsk-mode copy
+sudo ./build/dns_daemon eth0 --xdp-mode native --xsk-mode zero-copy
+```
+
+Native mode requires driver XDP support. Zero-copy additionally requires AF_XDP
+zero-copy support for the selected NIC, driver, queue, and UMEM configuration.
+An unsupported mode fails startup; the daemon never silently falls back. The
+readiness message reports both modes after querying the socket's active mode.
+Attach and cleanup use the selected XDP hook and preserve ownership checks.
+Zero-copy describes NIC/UMEM transfer; DNS processing still copies messages.
+See the [kernel AF_XDP documentation](https://docs.kernel.org/networking/af_xdp.html)
+for bind flags and socket mode reporting.
+
+Run the namespace smoke test with `native` to exercise native copy on drivers
+supporting it (including suitable veth kernels):
+
+```sh
+sudo python3 tests/xdp_smoke.py ./build/dns_daemon native
+```
+
+For hardware comparisons, run each of generic/copy, native/copy, and
+native/zero-copy on the same dedicated NIC and queue. From a separate client
+whose traffic is steered to that queue, run:
+
+```sh
+python3 tests/benchmark.py 192.0.2.1 --name example.com --count 10000 \
+  --label native-zero-copy-NIC-driver-kernel-run1
+```
+
+The tool warms one positive answer, validates replies, and emits JSON with
+completed requests, errors, sequential queries/second, and median/p95/p99 RTT.
+Repeat runs and retain JSON plus daemon mode logs, cache hit counts, NIC/driver,
+kernel, CPU, MTU, queue steering, and client configuration. Use a cacheable name
+with enough TTL for the run. This measures sequential warm-cache latency and
+request rate, not maximum parallel throughput. Hardware zero-copy validation
+and comparative measurements remain pending; veth results cannot establish
+hardware performance.
 
 ### Optional installation
 
@@ -359,7 +413,7 @@ CMakeLists.txt       Build, test, sanitizer, and install targets
 
 ## Roadmap
 
-- Native XDP and hardware zero-copy as explicit, benchmarked modes.
+- Comparative native XDP / hardware zero-copy measurements on a supported NIC.
 - Multiple receive queues with dedicated event loops and RSS coverage.
 - Optional acceleration for IPv6 transport and VLAN-tagged frames.
 - Deployment-specific systemd and namespace setup.

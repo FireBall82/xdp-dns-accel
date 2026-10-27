@@ -49,6 +49,8 @@ add_dependencies(dns_daemon bpf_target)
 
 include(CTest)
 if(BUILD_TESTING)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME dns_mode_options COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/mode_options.py" $<TARGET_FILE:dns_daemon>)
     add_executable(dns_tests tests/dns_tests.cpp)
     target_link_libraries(dns_tests PRIVATE dns_core PkgConfig::LIBXDP)
     target_compile_options(dns_tests PRIVATE -Wall -Wextra -Wpedantic)
