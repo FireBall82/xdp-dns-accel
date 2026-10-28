@@ -6,7 +6,7 @@
 
 <p align="center">
   A Linux DNS packet accelerator built with eBPF, AF_XDP, and C++20.<br>
-  Complete DNS answers, a shared response cache, and bounded upstream workers.
+  Shared response caching, bounded concurrency, and privilege separation.
 </p>
 
 <p align="center">
@@ -17,588 +17,128 @@
 </p>
 
 <p align="center">
-  <a href="#build">Build</a> ·
-  <a href="#try-it-with-dig">Try with dig</a> ·
-  <a href="#how-it-works">Architecture</a> ·
-  <a href="#tests">Tests</a> ·
-  <a href="#security-controls">Security</a> ·
-  <a href="#troubleshooting">Troubleshooting</a>
+  <a href="https://github.com/FireBall82/xdp-dns-accel/actions/workflows/security.yml"><img alt="Security and packet validation" src="https://github.com/FireBall82/xdp-dns-accel/actions/workflows/security.yml/badge.svg"></a>
+  <a href="https://github.com/FireBall82/xdp-dns-accel/actions/workflows/local-dns.yml"><img alt="Local DNS and deployment" src="https://github.com/FireBall82/xdp-dns-accel/actions/workflows/local-dns.yml/badge.svg"></a>
 </p>
 
----
+A systems programming project exploring DNS caching at the Linux packet boundary.
+An eBPF filter redirects selected IPv4 UDP DNS queries to an AF_XDP userspace
+service. Cache hits return complete responses with aged TTLs; misses use bounded
+workers to contact an upstream resolver, with UDP-to-TCP fallback.
 
-The BPF program intercepts IPv4 UDP queries on a selected receive queue and
-redirects them to userspace. Cache hits return a complete stored DNS response
-with updated TTLs. Misses go to a configurable upstream resolver. Automatic transport tries UDP
-first, then TCP if UDP is unanswered or truncated.
+The same C++ resolver core also runs over a localhost UDP socket, with a Python
+terminal monitor, systemd services, and NixOS packaging. Unbound supplies the
+separate downstream TCP fallback for local deployments.
 
-| What you get | How it behaves |
+**Status:** generic XDP/copy and native XDP/copy have isolated functional test
+coverage. Hardware zero-copy is implemented but awaits compatible-NIC validation.
+Comparative hardware throughput and latency measurements remain pending.
+This is a forwarding cache; upstream recursion and DNSSEC validation remain with
+the configured resolver.
+
+## Engineering highlights
+
+| Area | Implementation |
 | :--- | :--- |
-| **Complete answers** | Preserve CNAME chains, multiple addresses, authority records, and additional records. |
-| **Correct cache keys** | Compare full questions and request settings, including type, class, flags, upstream, and EDNS. |
-| **Aging TTLs** | Decrease every ordinary record's TTL; never cache zero-TTL responses. |
-| **Shared storage** | A versioned POSIX shared-memory cache with robust process-shared locks. |
-| **Bounded work** | A configurable worker pool and bounded queues keep memory use under control. |
-| **Checked packet paths** | Validate packet lengths, checksums, upstream identity, and response questions. |
+| Packet I/O | eBPF queue selection and CIDR filtering; AF_XDP RX/TX rings with explicit frame ownership and backpressure. |
+| DNS correctness | Complete response preservation, compression-aware parsing, request-specific cache keys, TTL aging, and UDP/TCP upstream validation. |
+| Shared cache | 4,096 entries in POSIX shared memory; keyed SipHash placement, full-key comparison, robust process-shared locks, and owner-death recovery. |
+| Concurrency | Bounded job/reply queues, configurable worker pool, and coalescing of equivalent in-flight cache misses. |
+| Security | Privileged supervisor, unprivileged DNS worker, frozen BPF policy maps, bounded client state, and admission rate limits. |
+| Observability | Prometheus counters/histograms, terminal monitoring, and a concurrent client benchmark reporting success rate and median/p95/p99 RTT. |
+| Verification | Regression tests, ASan/UBSan, two libFuzzer targets, real-packet namespace tests, and isolated NixOS deployment tests. |
 
-> **Default:** generic (SKB) XDP with **AF_XDP copy mode**, one receive
-> queue per daemon. Explicit native XDP and AF_XDP zero-copy modes are available.
-> This accelerates IPv4 UDP DNS; it is not a standalone recursive resolver.
-> Hardware zero-copy validation and comparative performance measurements remain pending.
+## Quick start
 
-## Build
-
-### Local DNS and terminal monitor
-
-Use `dnsctl watch` for live query rates, cache hits, processing time, failures,
-and queue depths. `dnsctl check` sends UDP/TCP test lookups; `dnsctl status --json`
-provides a snapshot for scripts. Monitoring needs no sudo or access code.
-
-```sh
-nix develop --command cmake -S . -B build
-nix develop --command cmake --build build -j2
-./build/dnsctl watch
-```
-
-The default Nix package supplies localhost UDP DNS, Unbound TCP fallback, and the
-CLI without BPF dependencies. It has no website or web settings UI. Building or
-running it leaves your system configuration unchanged.
-See [CLI usage, packages, services, and diagnostics](docs/local-dns.md).
-
-For daily browsing on a NetworkManager system, build `path:.#default`, then run
-`sudo ./result/bin/dnsctl enable`. The standalone service starts at boot, preserves
-Tailscale names, and restores the previous DNS setup with `dnsctl disable`. It
-does not edit your main NixOS configuration. See the guide for the full commands.
-
-
-### With Nix
+On Linux, build and test the resolver without BPF dependencies or root access.
+You need a C++20 compiler, CMake 3.20+, and Python 3.11+.
 
 ```sh
 git clone https://github.com/FireBall82/xdp-dns-accel.git
 cd xdp-dns-accel
-nix develop
-
-cmake -S . -B build
-cmake --build build -j
-ctest --test-dir build --output-on-failure
+cmake -S . -B build-local -DENABLE_XDP=OFF
+cmake --build build-local -j2
+ctest --test-dir build-local --output-on-failure
 ```
 
-Already have the repository? Start at `nix develop` from its directory.
+The suite uses local mock upstreams; it does not contact public DNS, attach XDP,
+or change your system DNS. When Unbound is available, socket tests also exercise
+the local TCP fallback.
 
-### With your own toolchain
-
-You need Linux, a C++20 compiler, CMake 3.20+, pkg-config, clang with the BPF
-backend, llvm-strip, libbpf, libxdp, and pthreads. Python 3 and iproute2 are
-required for the namespace smoke test; `dig` is needed for the walkthrough below.
-
-Use the same CMake commands as above. If necessary, select the BPF tools:
+For the full XDP build with a reproducible development environment:
 
 ```sh
-cmake -S . -B build \
-  -DBPF_CLANG=/path/to/clang \
-  -DBPF_STRIP=/path/to/llvm-strip
+nix develop --command cmake -S . -B build
+nix develop --command cmake --build build -j2
+nix develop --command ctest --test-dir build --output-on-failure
 ```
 
-Explicit CMake settings take precedence over the `CLANG` and `LLVM_STRIP`
-environment variables supplied by the Nix shell. The checked-in
-[`include/vmlinux.h`](include/vmlinux.h) provides BPF types; the shell generates
-it from host BTF if it is missing.
+Follow the [isolated veth walkthrough](docs/xdp-guide.md#try-it-with-dig) to send
+real DNS queries through AF_XDP, observe cache hits, and clean up the test network.
+For localhost services and `dnsctl watch`, use the [local DNS guide](docs/local-dns.md).
 
-## Try it with dig
-
-This walkthrough creates a **dedicated veth pair and client namespace**. The
-daemon runs on the host and uses its existing internet connection for upstream
-DNS, so the test requires no NAT or IP-forwarding changes.
-
-Run setup only once, using unused interface and namespace names. Start from the
-repository directory. The setup commands work in both Bash and fish.
-
-### 1. Create the test network
-
-```sh
-sudo ip netns add dns-client
-sudo ip link add veth-dns numtxqueues 1 numrxqueues 1 type veth \
-  peer name veth-client numtxqueues 1 numrxqueues 1
-sudo ip link set veth-client netns dns-client
-
-sudo ip addr add 192.0.2.1/30 dev veth-dns
-sudo ip link set veth-dns up
-
-sudo ip -n dns-client addr add 192.0.2.2/30 dev veth-client
-sudo ip -n dns-client link set veth-client up
-sudo ip -n dns-client link set lo up
-```
-
-### 2. Complete checksums on the sending peer
-
-**Do this before sending queries.** Virtual interfaces can deliver packets to
-generic AF_XDP with unfinished UDP checksums. AF_XDP does not expose the kernel's
-`CHECKSUM_PARTIAL` indication, so these packets fail strict checksum validation.
-
-```sh
-sudo ip netns exec dns-client python3 tests/xdp_smoke.py \
-  --disable-tx-checksum veth-client
-```
-
-The helper is equivalent to `ethtool -K veth-client tx off` inside that namespace.
-It changes only the named interface. Recreating the veth restores its defaults.
-
-### 3. Start the daemon
-
-Keep this terminal open:
-
-```sh
-sudo ./build/dns_daemon veth-dns --upstream 1.1.1.1:53 --workers 4
-```
-
-The walkthrough uses `1.1.1.1` as an example. If your network filters direct UDP
-DNS, use a reachable IPv4 resolver from `/etc/resolv.conf`, or add
-`--upstream-transport tcp`. The daemon does not automatically inherit the host's
-resolver settings. For example, a host using Tailscale DNS may use
-`--upstream 100.100.100.100:53`; verify that resolver is available in the daemon's
-network namespace.
-
-Wait for the readiness message:
-
-```text
-DNS accelerator ready: XDP attached, AF_XDP queue 0, RX fill ring populated
-```
-
-### 4. Query from a second terminal
-
-If `dig` is missing on Nix, open a shell with it:
-
-```sh
-nix shell nixpkgs#bind.dnsutils
-```
-
-**fish:**
-
-```fish
-function dnsdig
-    set -l dig_bin (command -v dig)
-    if test -z "$dig_bin"
-        echo "dig is missing; run: nix shell nixpkgs#bind.dnsutils" >&2
-        return 127
-    end
-    sudo ip netns exec dns-client "$dig_bin" \
-        @192.0.2.1 $argv +nocookie +ignore +tries=1 +time=3
-end
-```
-
-<details>
-<summary><strong>Bash / Zsh helper</strong></summary>
-
-```bash
-dnsdig() {
-    local dig_bin
-    dig_bin="$(command -v dig)"
-    if [ -z "$dig_bin" ]; then
-        echo "dig is missing; run: nix shell nixpkgs#bind.dnsutils" >&2
-        return 127
-    fi
-    sudo ip netns exec dns-client "$dig_bin" \
-        @192.0.2.1 "$@" +nocookie +ignore +tries=1 +time=3
-}
-```
-
-</details>
-
-Run these in either shell after defining its helper:
-
-```sh
-dnsdig example.com A
-sleep 2
-dnsdig example.com A
-
-dnsdig example.com AAAA
-dnsdig example.com TXT
-dnsdig does-not-exist.invalid A
-```
-
-Look for `status: NOERROR` on positive queries, a decreasing TTL on the repeated
-A query, and `NXDOMAIN` for the `.invalid` name. Query time alone does not prove
-a cache hit: press **Ctrl+C** in the daemon terminal and check that `hits` is
-nonzero.
-
-`+nocookie` matters: requests with EDNS cookies bypass caching. `+ignore` keeps
-this UDP-only test from retrying truncated replies over a downstream TCP service
-that has not been configured.
-
-### 5. Clean up
-
-Stop the daemon with **Ctrl+C** first, then remove the test network:
-
-```sh
-sudo ip link delete veth-dns
-sudo ip netns delete dns-client
-```
-
-## How it works
+## Architecture
 
 ```mermaid
 flowchart LR
     C[DNS client] --> X{XDP filter}
-    X -->|Other traffic| K[Kernel network stack]
-    X -->|IPv4 UDP :53 on selected queue| A[AF_XDP RX]
-    A --> H{Shared response cache}
-    H -->|Hit| T[Age TTLs and restore client question]
-    H -->|Miss| W[Bounded worker pool]
-    W --> U[Configured upstream]
-    U -->|UDP or TCP fallback| V[Validate complete response]
-    V --> P[Cache eligible positive answers]
-    P --> R[AF_XDP TX]
-    T --> R
-    R --> C
-
-    classDef packet fill:#143744,stroke:#59cabc,color:#e2f4fa
-    classDef cache fill:#182b48,stroke:#83afff,color:#e2ebff
-    class X,A,R packet
-    class H,T,W,V,P cache
+    X -->|Other traffic| K[Kernel stack]
+    X -->|Selected IPv4 UDP DNS| A[AF_XDP adapter]
+    L[Local UDP client] --> S[Socket adapter]
+    A --> P[Admission policy]
+    S --> P
+    P --> H{Shared response cache}
+    H -->|Hit| T[Age TTLs and restore client ID/question]
+    H -->|Miss| W[Bounded workers and miss coalescing]
+    W --> U[UDP/TCP upstream]
+    U --> V[Validate response and cache eligible answers]
+    T --> R[Reply through originating adapter]
+    V --> R
 ```
 
-### DNS behavior
+The supervisor owns privileged setup and XDP cleanup. The DNS worker drops
+privileges before parsing requests or contacting upstreams. Both packet adapters
+share the resolver, admission policy, and cache implementation.
 
-| Traffic or response | Behavior |
+The cache stores complete positive responses, including CNAME chains and additional
+records. NXDOMAIN/NODATA and stateful EDNS requests are forwarded without caching.
+Robust locks protect response snapshots across processes; if an owner dies while
+holding a lock, the affected set is invalidated before reuse. Bounded queues and
+follower limits keep admitted work finite under load.
+
+## Scope and evidence
+
+The XDP default is generic (SKB) mode with AF_XDP copy mode and one receive queue.
+TCP clients, IPv6 transport, VLANs, fragments, and oversized frames use the kernel
+path and require a conventional resolver. AAAA records work over IPv4 transport.
+Native XDP and zero-copy are explicit modes and fail startup when unsupported.
+
+The [security review](docs/security-review.md) records a reproduced compressed-question
+buffer overflow, its fix, and sanitizer/fuzz validation. It also documents access
+policy, plaintext upstream transport, and deployment boundaries. The
+[validation guide](docs/xdp-guide.md#tests) explains how to rerun each test layer.
+CI badges above link to actual workflow results.
+
+The [benchmark procedure](docs/xdp-guide.md#native-xdp-and-zero-copy) emits JSON
+with client-observed throughput, errors, and latency percentiles. No speedup or
+hardware capacity is claimed without comparative measurements.
+
+## Repository map
+
+| Path | Contents |
 | :--- | :--- |
-| A, AAAA, TXT, MX, and other standard query types | Forward complete responses; cache eligible positive answers. |
-| NXDOMAIN and NODATA | Preserve the upstream response; do not fabricate addresses or cache negatives. |
-| CNAME chains and multiple answers | Preserve the full answer and use the shortest applicable TTL for cache lifetime. |
-| EDNS and DNSSEC records | Relay records and flags; no local DNSSEC validation. |
-| Cookies, ECS, unsupported EDNS versions, authenticated messages | Forward without caching. |
-| Truncated upstream UDP | Try TCP within the same deadline; retain a clean TC response if fallback fails. |
-| Unanswered or failed upstream UDP | In automatic mode, try TCP after at most 300 ms, within the shared 1500 ms deadline. |
-| Oversized downstream response | Return a complete TC response within client, interface, and frame limits. |
-| Upstream failure / unsupported opcode | Return SERVFAIL / NOTIMP respectively. |
-| IPv6 transport, TCP clients, fragments, VLANs, frames over 2048 bytes | Leave processing to the kernel path. |
+| [`bpf/`](bpf/) | XDP filter and policy maps. |
+| [`include/`](include/), [`src/`](src/) | C++ resolver, shared cache, packet adapters, security, and metrics. |
+| [`admin/`](admin/) | Python service management and terminal monitor. |
+| [`tests/`](tests/) | Regression, fuzz, packet, deployment, and benchmark tools. |
+| [`deploy/`](deploy/), [`nix/`](nix/) | systemd integration, packages, NixOS module, and VM tests. |
+| [Operations guide](docs/xdp-guide.md) | Build options, DNS semantics, configuration, security, and troubleshooting. |
 
-**AAAA records are supported over IPv4 UDP.** IPv6 transport itself is not
-accelerated. For a complete DNS endpoint, keep a conventional resolver on the
-kernel paths, including TCP port 53 for clients retrying a TC reply.
+## Next steps
 
-### Cache and backpressure
+- Validate hardware zero-copy and compare generic/copy, native/copy, and native/zero-copy on the same NIC.
+- Add multiple receive queues and test RSS coverage.
+- Extend packet acceleration to IPv6 transport and VLAN-tagged frames.
 
-- **Storage:** 4096 entries in a roughly 19 MiB POSIX shared-memory mapping.
-- **Identity:** full-key comparison with label-aware ASCII case normalization;
-  cache hits restore the client's capitalization and transaction ID.
-- **Lifetime:** monotonic expiration, TTL aging, safe eviction, and no zero-TTL caching.
-- **Concurrency:** robust process-shared locks protect complete response snapshots.
-- **Isolation:** `/net_accel_dns_v3` is owned by the DNS worker with mode `0600`;
-  attachment validates the ABI and preserves entries and metrics. A random
-  128-bit key shared by attachments drives SipHash-2-4 cache placement.
-  Legacy `/net_accel_dns` and `/net_accel_dns_v2` mappings are unused and never
-  deleted automatically. Custom cache names using an older ABI fail attachment;
-  stop their users and choose a new name when upgrading.
-- **Miss coalescing:** equivalent cache-eligible questions share one upstream
-  request, with up to 32 additional clients per in-flight question. Each reply
-  restores its client ID and capitalization. Stateful/uncacheable questions do
-  not coalesce; excess followers receive SERVFAIL when output capacity allows.
-- **Capacity:** bounded work and reply queues; overload generates SERVFAIL when
-  response capacity allows. Sustained output saturation may drop replies and
-  increments `overloaded`.
-- **Frame ownership:** unsent TX frames and unreserved RX fill frames remain
-  queued for retry. Shutdown joins workers and releases resources without draining
-  queued work.
-
-## Configuration
-
-```text
-dns_daemon <interface>
-  [--upstream IPv4[:port]]
-  [--upstream-transport auto|udp|tcp]
-  [--workers 1..64]
-  [--queue 0..63]
-  [--xdp-mode generic|native]
-  [--xsk-mode copy|zero-copy]
-  [--allow-client IPv4[/prefix]]...
-  [--rate-limit 0..1000000]
-  [--client-rate-limit 0..1000000]
-  [--listen-address IPv4]
-  [--network-rate-limit IPv4/prefix:qps]...
-  [--reserve-client IPv4:qps]...
-  [--run-as user]
-  [--metrics-port 1024..65535]
-  [--bpf-object path]
-  [--cache-name /name]
-```
-
-| Option | Default | Purpose |
-| :--- | :--- | :--- |
-| `interface` | Required | Interface whose selected RX queue receives DNS queries. |
-| `--upstream` | `1.1.1.1:53` | Upstream resolver and optional port. |
-| `--upstream-transport` | `auto` | Try UDP for up to 300 ms, then TCP within the same 1500 ms deadline. `tcp` skips UDP; `udp` disables timeout fallback but retains TCP fallback for TC replies. |
-| `--workers` | `4` | Concurrent upstream requests, not additional NIC queues. |
-| `--xdp-mode` | `generic` | Select SKB or native driver XDP; no automatic fallback. |
-| `--xsk-mode` | `copy` | Force copy or zero-copy; zero-copy requires native XDP. |
-| `--allow-client` | Unrestricted | Repeat up to 64 times to permit only the specified IPv4 networks or hosts. |
-| `--rate-limit` | `0` (disabled) | Global admitted requests/second; one second of burst credit. |
-| `--client-rate-limit` | `0` (disabled) | Requests/second per source IPv4 address; one second of burst credit. |
-| `--listen-address` | Any destination | Accelerate only this unicast IPv4 destination; other endpoints pass to the kernel. |
-| `--network-rate-limit` | None | Up to 64 network budgets, each with a positive rate up to 1,000,000 requests/second. |
-| `--reserve-client` | None | Up to 64 distinct hosts with dedicated positive rate allowances, independent of dynamic client state. |
-| `--run-as` | `nobody` when root | DNS worker account; capability-launched non-root instances default to their own account. |
-| `--metrics-port` | Disabled | Serve Prometheus text at `http://127.0.0.1:PORT/metrics` in the daemon's network namespace. |
-| `--queue` | `0` | AF_XDP receive queue; other queues pass to the kernel. |
-| `--bpf-object` | Auto-discovered | Override the adjacent or installed BPF object. |
-| `--cache-name` | `/net_accel_dns_v3` | Use a separate private shared cache. |
-
-Use an interface dedicated to this service. The filter intercepts destination
-port 53 on that interface. Set `--listen-address` to restrict the endpoint;
-without it, interception is independent of destination IP. Configure RSS or
-steering for the selected queue on physical NICs. The daemon does not change
-host routes, NAT, offload settings, or resolver configuration.
-
-Loading BPF and configuring AF_XDP require suitable kernel privileges. Root is
-the straightforward development setup. The kernel must support generic XDP,
-BPF, AF_XDP, XSK maps, LPM tries, and BPF map freezing. Existing XDP programs
-are never replaced. A supervisor owns the XDP hook and cleans it up on normal
-shutdown and DNS worker death. Killing the supervisor with SIGKILL prevents
-normal cleanup; inspect the interface before restarting.
-
-### Security controls
-
-The [security review](docs/security-review.md) describes the architecture,
-reviewed protections, and deployment boundaries. The latest fix prevents a
-compressed DNS question from overwriting response memory during capitalization
-restoration. Regression and fuzz coverage retain this case. Service readiness
-checks also reject truncated replies and invalid response headers.
-
-Restrict the endpoint, clients, and admitted work for your deployment:
-
-```sh
-sudo ./build/dns_daemon veth-dns --listen-address 192.0.2.1 \
-  --allow-client 192.0.2.0/24 --rate-limit 10000 --client-rate-limit 100 \
-  --network-rate-limit 192.0.2.0/24:2000 --reserve-client 192.0.2.2:500 \
-  --metrics-port 9090
-```
-
-These rates are examples, not measured capacity recommendations. An address
-without a prefix means `/32`; CIDR host bits are normalized to the network.
-An empty allowlist permits all clients, and zero disables global/client limits.
-
-- **Early enforcement:** XDP checks the destination and source CIDRs before
-  redirecting selected-queue DNS packets. Unauthorized clients are dropped there;
-  other destinations pass to the kernel. Policy maps are populated and frozen
-  before attach. Userspace repeats the checks before DNS parsing or cache lookup.
-- **Admission budgets:** monotonic token buckets allow one second of initial and
-  accumulated burst credit. Every matching network budget applies to ordinary
-  clients; changing source ports does not reset a client budget. Denied requests
-  receive no reply and consume no upstream work.
-- **Reserved clients:** a reserved host has its own allowance and preallocated
-  state, bypassing shared global, network, and dynamic client budgets. It still
-  must satisfy the endpoint and allowlist policy. If a global rate is configured,
-  reserved rates are subtracted from it; their sum cannot exceed that rate.
-  Unused reserved credit is not lent to other clients. The remaining allowance
-  belongs to ordinary clients. Reservations protect capacity for IPv4 identities,
-  not authenticated people; spoofing a reserved address remains possible.
-- **Bounded state:** ordinary client tracking is capped at 4096 addresses. When
-  full, new ordinary clients are dropped. Active buckets are never evicted to
-  create fresh credit. State idle for 60 seconds is reclaimed at most once per
-  second. Up to 64 configured reservations remain usable when this table is full.
-- **Privilege separation:** the supervisor loads BPF, owns the socket and hook,
-  and samples kernel counters. A child handles DNS and upstream sockets under
-  `--run-as`, with all saved IDs changed, supplementary groups cleared when
-  launched as root, and permitted/effective/inheritable/ambient capabilities
-  cleared. It closes inherited BPF object handles. Root defaults to `nobody` for
-  development; create a dedicated service account and pass its name in production.
-  Non-root launches retain their existing account and supplementary groups.
-  The shared cache belongs to the worker account, so choose a new cache name if
-  an existing cache is owned by a different account.
-- **Process and build hardening:** supervisor and child disable core dumps and
-  set `no_new_privs`; the child reapplies non-dumpability after changing identity
-  and exits on supervisor loss. Userspace builds enable stack canaries, C++
-  library assertions, PIE, full RELRO, and a non-executable stack. Setting
-  `-DENABLE_HARDENING=OFF` disables extra build settings for diagnostics only.
-
-Policies cover only supported traffic on the selected queue. Configure host and
-fallback-resolver filtering for TCP, IPv6, fragments, VLANs, and other queues.
-Source IPv4 is not authentication, and admitted-query limits do not cap incoming
-NIC traffic. Limits are per daemon, not shared across cache attachments.
-Authenticated/encrypted DNS and syscall sandboxing are not implemented.
-
-### Live metrics and measurements
-
-```sh
-curl http://127.0.0.1:9090/metrics
-```
-
-The endpoint is loopback-only, opt-in, and runs in a separate worker thread. HTTP
-requests are bounded to 4096 bytes and 250 ms. It exposes no query names, client
-addresses, or cache secrets. Sample counters have the `net_accel_dns_` prefix:
-
-| Measurements | Contents |
-| :--- | :--- |
-| Security counters | `unauthorized_total`, `wrong_destination_total`, `global_limited_total`, `client_limited_total`, `network_limited_total`, `reserved_limited_total`, `client_table_full_total`. |
-| Kernel counters | `xdp_packets_total`, `xdp_dropped_total`, `xdp_redirected_total`, `xdp_unauthorized_total`, `destination_passed_total`, `rx_dropped_total`, `rx_invalid_total`, `tx_invalid_total`, `collection_errors_total`. |
-| Load and upstreams | Queries, cache hits, overload, failures, upstream timeouts, and coalesced requests. |
-| Gauges | Dynamic client count, job/reply queue depths, in-flight groups and followers. |
-| Latency histogram | `processing_seconds`, from service submission to reply enqueue; excludes NIC and TX delivery. |
-
-Kernel snapshots update about once per second and are cumulative for this XDP
-attachment/socket; packet counts include other traffic seen by the hook. Early
-XDP denials appear in `xdp_unauthorized_total`, not userspace `unauthorized_total`.
-Snapshots are approximate during concurrent activity. Shutdown prints final
-userspace counters after stopping upstream workers. Use the client benchmark
-for end-to-end RTT and legitimate-request success under load.
-
-### Native XDP and zero-copy
-
-```sh
-sudo ./build/dns_daemon eth0 --xdp-mode native --xsk-mode copy
-sudo ./build/dns_daemon eth0 --xdp-mode native --xsk-mode zero-copy
-```
-
-Native mode requires driver XDP support. Zero-copy additionally requires AF_XDP
-zero-copy support for the selected NIC, driver, queue, and UMEM configuration.
-An unsupported mode fails startup; the daemon never silently falls back. The
-readiness message reports both modes after querying the socket's active mode.
-Attach and cleanup use the selected XDP hook and preserve ownership checks.
-Zero-copy describes NIC/UMEM transfer; DNS processing still copies messages.
-See the [kernel AF_XDP documentation](https://docs.kernel.org/networking/af_xdp.html)
-for bind flags and socket mode reporting.
-
-Run the namespace smoke test with `native` to exercise native copy on drivers
-supporting it (including suitable veth kernels):
-
-```sh
-sudo python3 tests/xdp_smoke.py ./build/dns_daemon native
-```
-
-For hardware comparisons, run each of generic/copy, native/copy, and
-native/zero-copy on the same dedicated NIC and queue. From a separate client
-whose traffic is steered to that queue, run:
-
-```sh
-python3 tests/benchmark.py 192.0.2.1 --name example.com --count 10000 \
-  --concurrency 32 --label native-zero-copy-NIC-driver-kernel-run1
-```
-
-The tool warms one positive answer, validates replies, and emits JSON with
-completed requests, errors, success ratio, queries/second, and median/p95/p99 RTT.
-Concurrency defaults to one; up to 256 clients use independent UDP sockets.
-Repeat runs and retain JSON plus daemon mode logs, cache hit counts, NIC/driver,
-kernel, CPU, MTU, queue steering, and client configuration. Use a cacheable name
-with enough TTL for the run. Sweep concurrency to measure client-observed
-warm-cache capacity; these numbers include the load generator's own limits. Hardware zero-copy validation
-and comparative measurements remain pending; veth results cannot establish
-hardware performance.
-
-### Optional installation
-
-```sh
-sudo cmake --install build --prefix /usr/local
-```
-
-The daemon searches beside its executable and in the installation's
-`libexec/net_accel_dns` directory for `xdp_filter.bpf.o`. Use `--bpf-object` for a
-custom location.
-
-## Tests
-
-The 2026-10-28 security review passed all 10 regression tests in both normal and
-ASan/UBSan builds, all 12 tests in the Clang fuzz build, and 100,000 iterations of
-each DNS and packet fuzzer. The isolated NixOS XDP check passed in generic and
-native modes. These are functional and security checks; hardware zero-copy
-validation and hardware performance measurements remain pending.
-
-### Regression suite
-
-```sh
-ctest --test-dir build --output-on-failure
-```
-
-The default suite covers DNS parsing, complete responses, TTLs, cache collisions,
-concurrent access, process sharing, checksum failures, IPv4 options, bounded
-queues, and ring backpressure. Loopback mock DNS servers cover response
-validation, TCP fallback for truncation and silent UDP, explicit TCP mode, cache hits, TXT, NXDOMAIN, NODATA, and failures.
-Security regressions cover CIDR validation, silent access denials, global and
-per-source limits, fractional refill, bounded client state, cache-hit enforcement,
-network/reserved-client fairness, SipHash vectors, credential/capability dropping,
-request coalescing, HTTP metrics, and process hardening. When `readelf` is available, CTest also verifies PIE, full
-RELRO, non-executable stack, and stack-canary instrumentation in the built daemon.
-No public resolver is contacted and no XDP hook is attached by these tests.
-
-### Address and undefined-behavior sanitizers
-
-```sh
-cmake -S . -B build-sanitize -DCMAKE_BUILD_TYPE=Debug -DENABLE_SANITIZERS=ON
-cmake --build build-sanitize -j
-ctest --test-dir build-sanitize --output-on-failure
-```
-
-### Coverage-guided fuzzing
-
-```sh
-cmake -S . -B build-fuzz -DCMAKE_C_COMPILER=clang \
-  -DCMAKE_CXX_COMPILER=clang++ -DBUILD_FUZZERS=ON
-cmake --build build-fuzz -j
-ctest --test-dir build-fuzz --output-on-failure
-./build-fuzz/fuzz_dns -max_total_time=60 -max_len=4096 build-fuzz/fuzz_corpus/dns
-./build-fuzz/fuzz_packet -max_total_time=60 -max_len=4096 build-fuzz/fuzz_corpus/packet
-```
-
-Clang with libFuzzer, AddressSanitizer, and UBSan is required. Separate targets
-exercise DNS/EDNS/compression/response handling and Ethernet/IPv4/UDP parsing.
-Seeds are copied into the build directory, where mutations and crash reproducers
-can be retained without modifying checked-in seeds. CI runs both targets and
-retains diagnostics.
-
-### Privileged XDP smoke test
-
-```sh
-sudo python3 tests/xdp_smoke.py ./build/dns_daemon
-```
-
-Creates two temporary namespaces and a veth pair, disables checksum offload on
-its own test interfaces, and uses a local mock upstream. It checks actual DNS
-packets, cache hits, early CIDR rejection, destination bypass, client/network
-limits, worker credentials, graceful shutdown, and cleanup after worker SIGKILL.
-It reports legitimate-client RTT and success during a 2000-packet unauthorized
-burst, and checks live enforcement counters. It then removes its own interfaces,
-namespaces, and uniquely named cache. Root and kernel BPF/AF_XDP support are
-required. This test is separate from CTest. The GitHub security workflow runs
-it on generic and native XDP in isolated hosted Linux runners and retains results;
-hardware zero-copy validation still requires a compatible NIC.
-
-## Troubleshooting
-
-| Symptom | Check or fix |
-| :--- | :--- |
-| `Queries=0`, `malformed` rises, `bad_udp_checksums` rises | Disable TX checksum offload **on the sending veth peer** using step 2 above. |
-| `bad_ip_checksums` rises | Check the packet source or capture; invalid IPv4 headers are rejected. |
-| `Queries` and `forwarded` rise, `failures` rises | Check upstream reachability with `dig @1.1.1.1 example.com A +nocookie` from the daemon's namespace. |
-| No RX activity | Check both veth ends are up, addresses are correct, and traffic lands on the selected RX queue. |
-| Every reply is SERVFAIL after about 1500 ms | The upstream has not returned a valid answer within the shared deadline. Test that resolver from the daemon's namespace; try `--upstream-transport tcp` or use a reachable host resolver from `/etc/resolv.conf`. |
-| Queries work but cache hits stay at zero | Use `+nocookie`; negatives, zero-TTL replies, and stateful EDNS options bypass caching. |
-| A reply has `tc` set | The answer exceeds a UDP limit; a conventional downstream TCP resolver is required for client retry. |
-| BPF attach fails because a program already exists | Stop the previous owner cleanly; the daemon refuses to replace an existing hook. |
-| BPF or UMEM allocation fails | Check kernel support, permissions, and the service's locked-memory limit on older kernels. |
-| `dns_network_regressions` fails with socket permission errors | Run the tests where local sockets and temporary POSIX shared memory are allowed. |
-
-The daemon prints its readiness message after attaching XDP and populating the
-RX fill ring. The first rejected UDP checksum emits a diagnostic immediately.
-On **Ctrl+C**, final counters report queries, cache hits, upstream requests,
-failures, overload, malformed input, separate IP/UDP checksum failures, and security policy rejections.
-
-## Project layout
-
-```text
-bpf/                 XDP packet filter and maps
-include/             Protocol, shared-cache, queue, and ring interfaces
-src/                 Packet handling, upstream resolution, and daemon
-tests/               Regression suite and privileged namespace smoke test
-docs/assets/         README artwork
-flake.nix            Linux development environment
-CMakeLists.txt       Build, test, sanitizer, and install targets
-```
-
-## Roadmap
-
-- Comparative native XDP / hardware zero-copy measurements on a supported NIC.
-- Multiple receive queues with dedicated event loops and RSS coverage.
-- Optional acceleration for IPv6 transport and VLAN-tagged frames.
-- Deployment-specific XDP namespace setup; localhost services and terminal monitoring are available.
-- Sustained hardware measurements using exported metrics and concurrent load tests.
-
-See [`TODO.txt`](TODO.txt) for remaining work. Contributions should include a
-reproducer and regression coverage for behavior changes.
+See [remaining work](TODO.txt). Behavior changes should include a reproducer and
+appropriate regression coverage.
