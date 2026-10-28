@@ -1,0 +1,8 @@
+#!@Python3_EXECUTABLE@
+import sys
+sys.path.insert(0, "@DNS_PYTHON_PATH@")
+from net_accel_admin.cli import main
+raise SystemExit(main(["--daemon", "@CMAKE_INSTALL_FULL_BINDIR@/dns_daemon",
+                      "--systemctl", "@SYSTEMCTL_EXECUTABLE@", "--checkconf", "@UNBOUND_CHECKCONF@",
+                      "--unbound", "@UNBOUND_EXECUTABLE@",
+                      *sys.argv[1:]]))

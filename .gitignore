@@ -1,5 +1,7 @@
 /build/
 /build-*/
+/result
+/result-*
 /CMakeUserPresets.json
 /compile_commands.json
 *.o

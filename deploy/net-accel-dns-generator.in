@@ -1,0 +1,7 @@
+#!@Python3_EXECUTABLE@
+import sys
+sys.path.insert(0, "@CMAKE_INSTALL_FULL_LIBEXECDIR@/net_accel_dns/admin")
+from net_accel_admin.daily import generate
+if len(sys.argv) >= 2:
+    generate(sys.argv[2] if len(sys.argv) >= 3 else sys.argv[1],
+             "@CMAKE_INSTALL_FULL_LIBEXECDIR@/net_accel_dns/net-accel-dns-daily.service")

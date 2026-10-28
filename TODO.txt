@@ -5,9 +5,11 @@ Future work
   on a supported NIC; retain comparative results and hardware configuration.
 - Multiple AF_XDP receive queues with per-queue event loops and RSS coverage.
 - Optional acceleration of IPv6 transport and VLAN-tagged frames.
-- A deployment-specific systemd unit and namespace setup, once interface names,
-  addresses, fallback resolver, routing, and NAT policy are defined.
-- Measured throughput/latency and exported runtime metrics under sustained load.
+- Deployment-specific XDP namespace setup, once interface names, addresses,
+  routing, and NAT policy are defined. Localhost systemd units and a NixOS module
+  are available; see docs/local-dns.md.
+- Sustained hardware throughput/latency measurements using the implemented
+  concurrent benchmark and exported runtime metrics; tune budgets from results.
 
 TCP clients, IP fragments, IPv6 transport, VLANs and oversized frames currently
 use the kernel path. Keep a conventional resolver available on those paths.

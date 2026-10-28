@@ -14,6 +14,9 @@ import subprocess
 import sys
 import tempfile
 import time
+import json
+import threading
+import urllib.request
 
 
 def disable_tx_checksum(interface):
@@ -103,6 +106,70 @@ def client():
     print("XDP A/AAAA/TXT, cache, NXDOMAIN, NODATA and zero-TTL packets passed")
 
 
+def security_client():
+    # These source addresses exist only inside the temporary client namespace.
+    def burst(source):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.bind((source, 0))
+            sock.settimeout(0.3)
+            for transaction in (41000, 41001):
+                sock.sendto(question("a.test", 1, transaction), ("192.0.2.1", 53))
+            received = []
+            try:
+                while True:
+                    wire, _ = sock.recvfrom(65535)
+                    received.append(struct.unpack_from("!H", wire)[0])
+            except TimeoutError:
+                pass
+            assert received == [41000], (source, received)
+    burst("192.0.2.4")  # Per-client budget.
+    burst("192.0.2.5")  # Per-network budget.
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.bind(("192.0.2.2", 0))
+        sock.settimeout(0.3)
+        sock.sendto(question("a.test", 1, 42000), ("192.0.2.9", 53))
+        try:
+            wire, _ = sock.recvfrom(65535)
+            raise AssertionError(f"wrong destination was accelerated: {wire!r}")
+        except (TimeoutError, ConnectionRefusedError):
+            pass
+    def flood():
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.bind(("192.0.2.3", 0))
+            for transaction in range(2000):
+                sock.sendto(question("a.test", 1, transaction), ("192.0.2.1", 53))
+    attacker = threading.Thread(target=flood)
+    attacker.start()
+    latencies = []
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.bind(("192.0.2.2", 0))
+        sock.settimeout(1)
+        for transaction in range(100):
+            started = time.perf_counter_ns()
+            sock.sendto(question("a.test", 1, transaction), ("192.0.2.1", 53))
+            wire, peer = sock.recvfrom(65535)
+            assert peer == ("192.0.2.1", 53) and struct.unpack_from("!H", wire)[0] == transaction
+            assert wire[-4:] == ipaddress.IPv4Address("203.0.113.7").packed
+            latencies.append((time.perf_counter_ns() - started) / 1000)
+    attacker.join()
+    latencies.sort()
+    print("Security load: " + json.dumps(dict(legitimate_attempted=100, legitimate_completed=len(latencies),
+          unauthorized_sent=2000, median_us=latencies[49], p95_us=latencies[94], p99_us=latencies[98])), flush=True)
+
+
+def check_security_metrics():
+    deadline = time.monotonic() + 4
+    expected = ["xdp_unauthorized_total", "destination_passed_total", "client_limited_total", "network_limited_total"]
+    while time.monotonic() < deadline:
+        with urllib.request.urlopen("http://127.0.0.1:19090/metrics", timeout=1) as response:
+            body = response.read().decode()
+        if all(re.search(r"net_accel_dns_" + name + r" [1-9][0-9]*\n", body) for name in expected):
+            print(body, end="", flush=True)
+            return
+        time.sleep(0.05)
+    raise AssertionError("security enforcement counters did not increase: " + body)
+
+
 def smoke(daemon, xdp_mode="generic"):
     if os.geteuid() != 0:
         raise SystemExit("Run this smoke test with sudo; it creates only temporary namespaces and a veth pair.")
@@ -131,35 +198,69 @@ def smoke(daemon, xdp_mode="generic"):
             run("ip", "-n", namespace, "address", "add", address, "dev", interface)
             run("ip", "-n", namespace, "link", "set", interface, "up")
             run("ip", "netns", "exec", namespace, sys.executable, script, "--disable-tx-checksum", interface)
+        for address in ("192.0.2.3/24", "192.0.2.4/24", "192.0.2.5/24"):
+            run("ip", "-n", client_ns, "address", "add", address, "dev", client_if)
+        run("ip", "-n", server_ns, "address", "add", "192.0.2.9/24", "dev", server_if)
         with tempfile.TemporaryFile(mode="w+") as log:
+            def read_log():
+                return os.pread(log.fileno(), 1024 * 1024, 0).decode()
+            def wait_worker(previous=0):
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    output = read_log()
+                    pids = re.findall(r"Worker PID=([0-9]+) uid=([0-9]+)", output)
+                    if len(pids) > previous and output.count("DNS accelerator ready:") == len(pids):
+                        pid, uid = map(int, pids[-1])
+                        assert uid != 0, "DNS worker retained root"
+                        status = Path(f"/proc/{pid}/status").read_text()
+                        for capability in ("CapInh", "CapPrm", "CapEff", "CapAmb"):
+                            assert re.search(capability + r":\s+0+\n", status), status
+                        assert re.search(r"NoNewPrivs:\s+1\n", status), status
+                        return pid
+                    if process.poll() is not None:
+                        break
+                    time.sleep(0.02)
+                raise RuntimeError("worker did not start: " + read_log())
+            command = ["ip", "netns", "exec", server_ns, daemon, server_if,
+                       "--upstream", "127.0.0.1:15353", "--cache-name", cache,
+                       "--xdp-mode", xdp_mode, "--xsk-mode", "copy", "--listen-address", "192.0.2.1",
+                       "--allow-client", "192.0.2.2", "--allow-client", "192.0.2.4", "--allow-client", "192.0.2.5",
+                       "--rate-limit", "10000", "--client-rate-limit", "1", "--network-rate-limit", "192.0.2.0/24:100",
+                       "--network-rate-limit", "192.0.2.5/32:1", "--reserve-client", "192.0.2.2:1000", "--metrics-port", "19090"]
             upstream = subprocess.Popen(["ip", "netns", "exec", server_ns, sys.executable, script, "--mock"], stdout=log, stderr=log)
             deadline = time.monotonic() + 3
             while True:
-                log.seek(0)
-                if "ready" in log.read():
+                if "ready" in read_log():
                     break
                 if upstream.poll() is not None or time.monotonic() >= deadline:
                     raise RuntimeError("mock DNS server did not start")
                 time.sleep(0.02)
-            process = subprocess.Popen(["ip", "netns", "exec", server_ns, daemon, server_if,
-                                        "--upstream", "127.0.0.1:15353", "--cache-name", cache,
-                                        "--xdp-mode", xdp_mode, "--xsk-mode", "copy"], stdout=log, stderr=log)
+            process = subprocess.Popen(command, stdout=log, stderr=log)
             try:
+                wait_worker()
                 run("ip", "netns", "exec", client_ns, sys.executable, script, "--client")
+                run("ip", "netns", "exec", client_ns, sys.executable, script, "--security-client")
+                run("ip", "netns", "exec", server_ns, sys.executable, script, "--check-metrics")
                 process.send_signal(signal.SIGTERM)
                 process.wait(timeout=5)
                 assert process.returncode == 0, "daemon failed during shutdown"
-                log.seek(0)
-                output = log.read()
+                output = read_log()
                 print(output, end="")
                 assert re.search(r"hits=[1-9][0-9]*", output), "no cache hit observed"
                 assert f"XDP={xdp_mode} AF_XDP=copy" in output, "mode not verified"
                 # The selected hook must have been removed on graceful shutdown.
                 link = subprocess.check_output(["ip", "-n", server_ns, "-details", "link", "show", "dev", server_if], text=True)
                 assert "prog/xdp" not in link, "XDP program left attached"
+                # Abrupt worker death must also trigger supervisor cleanup.
+                process = subprocess.Popen(command, stdout=log, stderr=log)
+                worker = wait_worker(previous=1)
+                os.kill(worker, signal.SIGKILL)
+                process.wait(timeout=5)
+                assert process.returncode == 128 + signal.SIGKILL, process.returncode
+                link = subprocess.check_output(["ip", "-n", server_ns, "-details", "link", "show", "dev", server_if], text=True)
+                assert "prog/xdp" not in link, "worker crash left XDP attached"
             except Exception:
-                log.seek(0)
-                print(log.read(), file=sys.stderr)
+                print(read_log(), file=sys.stderr)
                 raise
     finally:
         for child in (process, upstream):
@@ -184,6 +285,10 @@ if __name__ == "__main__":
         disable_tx_checksum(sys.argv[2])
     elif len(sys.argv) == 2 and sys.argv[1] == "--mock":
         mock_upstream()
+    elif len(sys.argv) == 2 and sys.argv[1] == "--security-client":
+        security_client()
+    elif len(sys.argv) == 2 and sys.argv[1] == "--check-metrics":
+        check_security_metrics()
     elif len(sys.argv) == 2 and sys.argv[1] == "--client":
         client()
     elif len(sys.argv) in (2, 3) and (len(sys.argv) == 2 or sys.argv[2] in ("generic", "native")):

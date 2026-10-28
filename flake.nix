@@ -12,13 +12,31 @@
       nixpkgs,
       flake-utils,
     }:
-    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (
+    (flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (
       system:
       let
         pkgs = import nixpkgs { inherit system; };
         llvm = pkgs.llvmPackages;
       in
       {
+        packages.default = pkgs.callPackage ./nix/package.nix {};
+        packages.xdp = pkgs.callPackage ./nix/package.nix { enableXdp = true; };
+        checks.local-deployment = import ./nix/vm-test.nix {
+          inherit pkgs;
+          package = pkgs.callPackage ./nix/package.nix {};
+        };
+        checks.xdp-smoke = import ./nix/xdp-test.nix {
+          inherit pkgs;
+          package = pkgs.callPackage ./nix/package.nix { enableXdp = true; };
+        };
+        checks.daily-dns = import ./nix/daily-test.nix {
+          inherit pkgs;
+          package = pkgs.callPackage ./nix/package.nix {};
+        };
+        checks.standalone-daily = import ./nix/standalone-test.nix {
+          inherit pkgs;
+          package = pkgs.callPackage ./nix/package.nix {};
+        };
         devShells.default = pkgs.mkShell {
           nativeBuildInputs = [
             pkgs.cmake
@@ -56,5 +74,7 @@
           '';
         };
       }
-    );
+    )) // {
+      nixosModules.default = import ./nix/module.nix;
+    };
 }

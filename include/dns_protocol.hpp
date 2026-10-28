@@ -29,7 +29,7 @@ std::optional<Query> parse_query(View wire);
 bool valid_response(const Query& query, View response);
 uint32_t cache_ttl(const Query& query, View response);
 bool age_response(Bytes& response, uint32_t seconds);
-void restore_question(const Query& query, Bytes& response);
+bool restore_question(const Query& query, Bytes& response);
 Bytes error_response(const Query& query, uint16_t rcode);
 Bytes fit_response(const Query& query, View response, size_t maximum);
 struct UdpPacket { Bytes headers; Bytes dns; };

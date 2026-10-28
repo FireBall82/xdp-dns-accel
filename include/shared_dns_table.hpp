@@ -1,4 +1,5 @@
 #pragma once
+#include "keyed_hash.hpp"
 
 #include <algorithm>
 #include <array>
@@ -24,12 +25,6 @@ inline uint64_t monotonic_ns() noexcept {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
-inline uint64_t calculate_hash(std::span<const uint8_t> key) noexcept {
-    uint64_t hash = 14695981039346656037ULL;
-    for (uint8_t c : key) hash = (hash ^ c) * 1099511628211ULL;
-    return hash;
-}
-
 // Set associative storage avoids deletion holes. Each set has one robust,
 // process-shared lock; readers copy a complete response while holding that lock.
 template<size_t Capacity = 4096>
@@ -53,8 +48,8 @@ class alignas(64) SharedDnsTable {
         std::array<Entry, ways> entries{};
     };
 public:
-    static constexpr uint64_t SHM_MAGIC = 0x444e534143433032ULL;
-    static constexpr const char* SHM_PATH = "/net_accel_dns_v2";
+    static constexpr uint64_t SHM_MAGIC = 0x444e534143433033ULL;
+    static constexpr const char* SHM_PATH = "/net_accel_dns_v3";
     struct alignas(64) TableHeader {
         uint64_t magic_identifier = 0;
         uint64_t capacity = Capacity;
@@ -62,7 +57,7 @@ public:
         std::atomic<uint64_t> total_queries{0};
         std::atomic<uint64_t> cache_hits{0};
     };
-    SharedDnsTable() {
+    SharedDnsTable() : hash_key_(random_hash_key()) {
         pthread_mutexattr_t attr;
         if (pthread_mutexattr_init(&attr)) throw std::runtime_error("mutex attributes failed");
         int err = pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
@@ -132,7 +127,7 @@ public:
                 uint64_t now_ns, uint32_t& age_seconds) {
         header_.total_queries.fetch_add(1, std::memory_order_relaxed);
         if (key.empty() || key.size() > max_key) return false;
-        uint64_t hash = calculate_hash(key);
+        uint64_t hash = keyed_hash(key, hash_key_);
         auto& set = sets_[hash & (sets_.size() - 1)];
         Guard lock(set);
         for (auto& entry : set.entries) {
@@ -150,7 +145,7 @@ public:
                 uint32_t ttl_seconds, uint64_t now_ns) {
         if (key.empty() || key.size() > max_key || response.size() < 12 ||
             response.size() > max_response || ttl_seconds == 0 || ttl_seconds > 0x7fffffffU) return false;
-        uint64_t hash = calculate_hash(key);
+        uint64_t hash = keyed_hash(key, hash_key_);
         auto& set = sets_[hash & (sets_.size() - 1)];
         Guard lock(set);
         Entry* selected = nullptr;
@@ -202,6 +197,7 @@ private:
                std::equal(key.begin(), key.end(), entry.key.begin());
     }
     TableHeader header_{};
+    HashKey hash_key_;
     std::array<Set, Capacity / ways> sets_{};
 };
 } // namespace net_accel

@@ -1,0 +1,65 @@
+name: Local DNS and terminal monitor
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ubuntu-deployment:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: sudo apt-get update && sudo apt-get install -y cmake g++ python3 unbound
+      - name: Build without BPF dependencies and test real UDP/TCP DNS
+        run: |
+          cmake -S . -B build-local -DENABLE_XDP=OFF
+          cmake --build build-local -j2
+          ctest --test-dir build-local --output-on-failure
+          sudo cmake --install build-local
+      - name: Exercise installed services on this disposable runner
+        run: |
+          sudo systemctl daemon-reload
+          sudo env NET_ACCEL_ISOLATED_TEST=1 python3 tests/deployment_test.py /usr/local/bin/dnsctl
+      - name: Retain diagnostics
+        if: always()
+        run: sudo journalctl -u 'net-accel-dns*' --no-pager > local-dns-services.log
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ubuntu-local-dns
+          path: |
+            local-dns-services.log
+            build-local/Testing/Temporary/LastTest.log
+  distribution-builds:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [debian:13, fedora:44, archlinux:base-devel]
+    container: ${{ matrix.image }}
+    steps:
+      - name: Install build dependencies
+        shell: sh
+        run: |
+          if command -v apt-get >/dev/null; then
+            apt-get update && apt-get install -y git cmake g++ python3 unbound
+          elif command -v dnf >/dev/null; then
+            dnf install -y git cmake gcc-c++ python3 unbound
+          else
+            pacman -Syu --noconfirm git cmake gcc python unbound
+          fi
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Build, test and validate installation
+        run: |
+          cmake -S . -B build-local -DENABLE_XDP=OFF
+          cmake --build build-local -j2
+          ctest --test-dir build-local --output-on-failure
+          DESTDIR=/tmp/net-accel-install cmake --install build-local
+  nixos-deployment:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: cachix/install-nix-action@v31
+      - name: Build and run isolated NixOS deployment test
+        run: nix build .#checks.x86_64-linux.local-deployment .#checks.x86_64-linux.daily-dns .#checks.x86_64-linux.standalone-daily .#checks.x86_64-linux.xdp-smoke --print-build-logs

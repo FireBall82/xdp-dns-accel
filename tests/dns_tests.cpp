@@ -1,9 +1,12 @@
 #include "bounded_queue.hpp"
 #include "dns_protocol.hpp"
 #include "resolver_service.hpp"
+#include "runtime_metrics.hpp"
 #include "shared_dns_table.hpp"
 #include "upstream.hpp"
+#ifdef NET_ACCEL_XDP
 #include "xsk_rings.hpp"
+#endif
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -166,6 +169,24 @@ void edns_and_ttl() {
     REQUIRE(read32(edns_truncated, edns_truncated.size() - 6) == 0x01008000);
 }
 void malformed_dns() {
+    // A backward pointer can target a name embedded in binary label data.
+    // Its expanded name is longer than the encoded question and must never
+    // be copied over that question in place.
+    Bytes compressed(12, 0);
+    write16(compressed, 2, 0x0100);
+    write16(compressed, 4, 1);
+    compressed.insert(compressed.end(), {20, 18});
+    compressed.insert(compressed.end(), 18, 'a');
+    compressed.insert(compressed.end(), {0, 0xc0, 13, 0, 1, 0, 1});
+    auto compressed_query = parse_query(compressed);
+    REQUIRE(compressed_query && compressed_query->cache_key.empty());
+    auto compressed_response = compressed;
+    write16(compressed_response, 2, 0x8180);
+    REQUIRE(valid_response(*compressed_query, compressed_response));
+    auto preserved = compressed_response;
+    REQUIRE(!restore_question(*compressed_query, compressed_response));
+    REQUIRE(compressed_response == preserved);
+
     auto wire = query_wire();
     for (size_t length = 0; length < wire.size(); ++length) REQUIRE(!parse_query(View(wire).first(length)));
     auto bad = wire; write16(bad, 4, 2); REQUIRE(!parse_query(bad));
@@ -300,8 +321,10 @@ void queue_and_rings() {
     auto blocked = std::async(std::launch::async, [&] { return queue.push_wait(4); });
     queue.close();
     REQUIRE(!blocked.get() && !queue.pop_wait(item) && !queue.try_push(5));
+#ifdef NET_ACCEL_XDP
     uint32_t producer = 0, consumer = 0, flags = 0;
-    std::array<uint64_t, 4> storage{};
+    // Match libxdp's __u64 type; uint64_t can have a different aliasing type.
+    std::array<__u64, 4> storage{};
     xsk_ring_prod ring{};
     ring.cached_cons = 4; ring.mask = 3; ring.size = 4;
     ring.producer = &producer; ring.consumer = &consumer; ring.flags = &flags; ring.ring = storage.data();
@@ -320,6 +343,7 @@ void queue_and_rings() {
     REQUIRE(descriptors[2].addr == 123 && descriptors[2].len == 45 && descriptors[3].addr == 678);
     consumer = 5;
     REQUIRE(submit_frames(ring, pending) == 1 && pending.empty());
+#endif
 }
 
 class Socket {
@@ -474,6 +498,128 @@ void tcp_fallback() {
     fallback.get();
     REQUIRE(result && valid_response(q, *result) && (read16(*result, 2) & 0x200) && read16(*result, 6) == 0);
 }
+void upstream_transport_fallback() {
+    for (auto transport : {UpstreamTransport::automatic, UpstreamTransport::tcp}) {
+        Socket udp(SOCK_DGRAM), tcp(SOCK_STREAM);
+        auto address = udp.bind_local();
+        tcp.bind_local(address.sin_port);
+        REQUIRE(listen(tcp.fd, 1) == 0);
+        auto responder = std::async(std::launch::async, [&] {
+            pollfd item{tcp.fd, POLLIN, 0};
+            REQUIRE(poll(&item, 1, 2000) == 1);
+            int client = accept4(tcp.fd, nullptr, nullptr, SOCK_CLOEXEC);
+            REQUIRE(client >= 0);
+            struct Close { int fd; ~Close() { close(fd); } } cleanup{client};
+            timeval timeout{2, 0};
+            REQUIRE(setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == 0);
+            Bytes prefix(2);
+            REQUIRE(recv(client, prefix.data(), 2, MSG_WAITALL) == 2);
+            Bytes request(read16(prefix, 0));
+            REQUIRE(recv(client, request.data(), request.size(), MSG_WAITALL) == static_cast<ssize_t>(request.size()));
+            auto parsed = parse_query(request); REQUIRE(parsed);
+            auto full = answer(*parsed);
+            Bytes payload(full.size() + 2);
+            write16(payload, 0, full.size());
+            std::copy(full.begin(), full.end(), payload.begin() + 2);
+            REQUIRE(send(client, payload.data(), payload.size(), MSG_NOSIGNAL) == static_cast<ssize_t>(payload.size()));
+        });
+        auto original = query();
+        bool timed_out = true;
+        auto started = std::chrono::steady_clock::now();
+        auto response = resolve_upstream(original, address, 1000, &timed_out, transport);
+        responder.get();
+        REQUIRE(response && *response == answer(original) && !timed_out);
+        REQUIRE(std::chrono::steady_clock::now() - started < std::chrono::seconds(2));
+        pollfd input{udp.fd, POLLIN, 0};
+        REQUIRE(poll(&input, 1, 0) == (transport == UpstreamTransport::automatic ? 1 : 0));
+    }
+    // Explicit UDP mode waits for UDP without probing a TCP listener.
+    Socket silent(SOCK_DGRAM);
+    bool timed_out = false;
+    REQUIRE(!resolve_upstream(query(), silent.bind_local(), 30, &timed_out, UpstreamTransport::udp));
+    REQUIRE(timed_out);
+}
+void coalescing() {
+    Socket server(SOCK_DGRAM);
+    auto address = server.bind_local();
+    std::promise<void> seen, release;
+    auto gate = release.get_future();
+    auto responder = std::async(std::launch::async, [&] {
+        auto [wire, peer] = receive_query(server.fd);
+        auto parsed = parse_query(wire); REQUIRE(parsed);
+        seen.set_value();
+        REQUIRE(gate.wait_for(std::chrono::seconds(3)) == std::future_status::ready);
+        send_reply(server.fd, answer(*parsed), peer);
+    });
+    auto cache = std::make_unique<SharedDnsTable<>>();
+    ResolverService service(cache.get(), address, 1232, 2, [] {});
+    std::vector<Bytes> requests;
+    for (unsigned i = 0; i < 34; ++i) {
+        auto wire = query_wire();
+        write16(wire, 0, i);
+        if (i & 1) wire[13] = 'E';
+        requests.push_back(wire);
+        auto packet = parse_ipv4_udp(ethernet_query(wire)); REQUIRE(packet);
+        service.submit(std::move(*packet));
+        if (i == 0) REQUIRE(seen.get_future().wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+    }
+    REQUIRE(service.metrics.coalesced == 32 && service.metrics.overloaded == 1);
+    release.set_value();
+    responder.get();
+    unsigned replies = 0, failures = 0;
+    std::array<bool, 34> ids{};
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (replies < 34 && std::chrono::steady_clock::now() < deadline) {
+        Bytes frame;
+        if (!service.try_response(frame)) { std::this_thread::yield(); continue; }
+        View wire = View(frame).subspan(42);
+        auto id = read16(wire, 0);
+        REQUIRE(id < requests.size() && !ids[id]);
+        ids[id] = true;
+        REQUIRE(std::equal(requests[id].begin() + 12, requests[id].end(), wire.begin() + 12));
+        if ((read16(wire, 2) & 15) == 2) ++failures;
+        ++replies;
+    }
+    REQUIRE(replies == 34 && failures == 1 && service.metrics.forwarded == 1);
+    REQUIRE(service.metrics.inflight_groups == 0 && service.metrics.inflight_waiters == 0);
+    // A later request gets the shared cached answer with its own ID/case.
+    service.submit(*parse_ipv4_udp(ethernet_query(requests[1])));
+    Bytes frame;
+    REQUIRE(service.try_response(frame) && service.metrics.hits == 1);
+    REQUIRE(read16(View(frame).subspan(42), 0) == 1);
+    service.stop();
+}
+void metrics_http() {
+    auto cache = std::make_unique<SharedDnsTable<>>();
+    ResolverService service(cache.get(), upstream_address("127.0.0.1"), 1232, 1, [] {});
+    KernelMetrics kernel;
+    kernel.xdp_unauthorized = 7;
+    auto metrics = std::make_unique<MetricsServer>(service, kernel, 0);
+    auto scrape = [&](const char* request) {
+        Socket client(SOCK_STREAM);
+        sockaddr_in address = upstream_address("127.0.0.1:" + std::to_string(metrics->port()));
+        REQUIRE(connect(client.fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0);
+        timeval timeout{2, 0};
+        REQUIRE(setsockopt(client.fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == 0);
+        REQUIRE(send(client.fd, request, std::strlen(request), MSG_NOSIGNAL) == static_cast<ssize_t>(std::strlen(request)));
+        std::string result;
+        char buffer[2048];
+        ssize_t count;
+        while ((count = recv(client.fd, buffer, sizeof(buffer), 0)) > 0) result.append(buffer, count);
+        REQUIRE(count == 0);
+        return result;
+    };
+    auto response = scrape("GET /metrics HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    REQUIRE(response.starts_with("HTTP/1.1 200 OK"));
+    REQUIRE(response.find("net_accel_dns_xdp_unauthorized_total 7\n") != std::string::npos);
+    REQUIRE(response.find("net_accel_dns_job_queue_depth 0\n") != std::string::npos);
+    REQUIRE(response.find("net_accel_dns_processing_seconds_bucket{le=\"+Inf\"}") != std::string::npos);
+    REQUIRE(scrape("POST /metrics HTTP/1.1\r\n\r\n").starts_with("HTTP/1.1 400 Bad Request"));
+    auto port = metrics->port();
+    metrics.reset();
+    metrics = std::make_unique<MetricsServer>(service, kernel, port);
+    REQUIRE(scrape("GET /metrics HTTP/1.1\r\nHost: localhost\r\n\r\n").starts_with("HTTP/1.1 200 OK"));
+}
 void service_integration() {
     Socket server(SOCK_DGRAM);
     auto address = server.bind_local();
@@ -544,6 +690,9 @@ int main(int argc, char**) {
             upstream_validation();
             tcp_fallback();
             service_integration();
+            upstream_transport_fallback();
+            coalescing();
+            metrics_http();
             std::cout << "Upstream validation, TCP fallback and resolver integration passed\n";
             return 0;
         }

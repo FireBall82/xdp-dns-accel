@@ -42,6 +42,7 @@ public:
         space_.notify_one();
         return true;
     }
+    size_t size() const { std::lock_guard lock(mutex_); return queue_.size(); }
     void close() {
         std::lock_guard lock(mutex_);
         closed_ = true;
@@ -52,7 +53,7 @@ private:
     const size_t capacity_;
     bool closed_ = false;
     std::deque<T> queue_;
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::condition_variable ready_, space_;
 };
 } // namespace net_accel

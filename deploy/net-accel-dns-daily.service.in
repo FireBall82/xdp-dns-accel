@@ -1,0 +1,28 @@
+[Unit]
+Description=Daily localhost DNS with reversible NetworkManager integration
+Wants=NetworkManager.service network-online.target
+After=NetworkManager.service network-online.target tailscaled.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/dnsctl daily-run
+ExecStopPost=@CMAKE_INSTALL_FULL_BINDIR@/dnsctl daily-restore
+Restart=on-failure
+RestartSec=15
+TimeoutStartSec=60
+TimeoutStopSec=45
+KillMode=mixed
+StateDirectory=net-accel-dns
+StateDirectoryMode=0700
+RuntimeDirectory=net-accel-daily
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/run/NetworkManager /dev/shm
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK
+UMask=0077

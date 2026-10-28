@@ -17,13 +17,28 @@ struct {
     __type(value, __u8);  // Status flag (1 = blocked)
 } ip_blocklist SEC(".maps");
 
-// BPF Map: AF_XDP sockets (the daemon explicitly selects copy mode).
+// BPF Map: AF_XDP sockets (mode is selected explicitly by the daemon).
 struct {
     __uint(type, BPF_MAP_TYPE_XSKMAP);
     __uint(max_entries, 64);
     __type(key, __u32);   // Queue ID
     __type(value, __u32); // AF_XDP socket fd
 } xsks_map SEC(".maps");
+
+// Immutable policy is populated and frozen by the privileged supervisor.
+struct {
+    __uint(type, BPF_MAP_TYPE_LPM_TRIE);
+    __uint(max_entries, 64);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __type(key, struct ipv4_prefix_key);
+    __type(value, __u32);
+} allowed_clients SEC(".maps");
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, struct dns_filter_config);
+} filter_config SEC(".maps");
 
 // BPF Map: Global per-CPU packet counter stats
 struct {
@@ -103,6 +118,19 @@ int xdp_dns_accelerator(struct xdp_md *ctx) {
         __u32 rx_queue_id = ctx->rx_queue_index;
 
         if (bpf_map_lookup_elem(&xsks_map, &rx_queue_id)) {
+            struct dns_filter_config *config = bpf_map_lookup_elem(&filter_config, &key_zero);
+            // A mismatched endpoint belongs to the existing kernel path.
+            if (config && config->restrict_destination && iph->daddr != config->destination) {
+                if (stats) stats->destination_passed++;
+                return XDP_PASS;
+            }
+            if (config && config->restrict_clients) {
+                struct ipv4_prefix_key source = { .prefixlen = 32, .address = iph->saddr };
+                if (!bpf_map_lookup_elem(&allowed_clients, &source)) {
+                    if (stats) { stats->unauthorized++; stats->dropped_packets++; }
+                    return XDP_DROP;
+                }
+            }
             if (stats) {
                 stats->dns_redirected++;
             }

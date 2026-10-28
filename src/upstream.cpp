@@ -45,6 +45,7 @@ bool transfer(int fd, uint8_t* data, size_t size, bool writing, Deadline deadlin
     return true;
 }
 std::optional<Bytes> tcp_query(const Query& query, const sockaddr_in& address, Deadline deadline) {
+    if (Clock::now() >= deadline) return std::nullopt;
     Fd fd(socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0));
     if (fd < 0) return std::nullopt;
     if (connect(fd, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) < 0 && errno != EINPROGRESS) return std::nullopt;
@@ -82,7 +83,34 @@ sockaddr_in upstream_address(std::string_view text) {
         throw std::invalid_argument("upstream must be IPv4[:port]");
     return address;
 }
-std::optional<Bytes> resolve_upstream(const Query& original, const sockaddr_in& address, int timeout_ms) {
+ForwardZone forward_zone(std::string_view text) {
+    auto separator = text.find('=');
+    if (separator == std::string_view::npos) throw std::invalid_argument("forward zone must be domain=IPv4[:port]");
+    auto domain = text.substr(0, separator);
+    if (!domain.empty() && domain.back() == '.') domain.remove_suffix(1);
+    if (domain.empty() || domain.size() > 253) throw std::invalid_argument("invalid forward zone domain");
+    ForwardZone zone{{}, upstream_address(text.substr(separator + 1))};
+    for (size_t start = 0; start < domain.size();) {
+        auto end = domain.find('.', start);
+        if (end == std::string_view::npos) end = domain.size();
+        size_t length = end - start;
+        if (!length || length > 63 || end + 1 == domain.size()) throw std::invalid_argument("invalid forward zone label");
+        zone.suffix.push_back(static_cast<uint8_t>(length));
+        for (size_t i = start; i < end; ++i) {
+            unsigned char c = domain[i];
+            if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+            if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_'))
+                throw std::invalid_argument("forward zone labels must be ASCII DNS names");
+            zone.suffix.push_back(c);
+        }
+        start = end + 1;
+    }
+    zone.suffix.push_back(0);
+    return zone;
+}
+std::optional<Bytes> resolve_upstream(const Query& original, const sockaddr_in& address, int timeout_ms,
+                                      bool* timed_out, UpstreamTransport transport) {
+    if (timed_out) *timed_out = false;
     if (timeout_ms <= 0) return std::nullopt;
     Query query = original;
     uint16_t id = 0;
@@ -90,28 +118,40 @@ std::optional<Bytes> resolve_upstream(const Query& original, const sockaddr_in& 
     do { random_count = getrandom(&id, sizeof(id), 0); } while (random_count < 0 && errno == EINTR);
     if (random_count != sizeof(id)) return std::nullopt;
     write16(query.wire, 0, id);
-    auto deadline = Clock::now() + std::chrono::milliseconds(timeout_ms);
-    Fd fd(socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0));
-    if (fd < 0 || connect(fd, reinterpret_cast<const sockaddr*>(&address), sizeof(address))) return std::nullopt;
-    if (send(fd, query.wire.data(), query.wire.size(), MSG_NOSIGNAL) != static_cast<ssize_t>(query.wire.size())) return std::nullopt;
-    while (wait_fd(fd, POLLIN, deadline)) {
-        Bytes reply(65535);
-        ssize_t count = recv(fd, reply.data(), reply.size(), MSG_TRUNC);
-        if (count < 0) {
-            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) continue;
-            return std::nullopt;
-        }
-        if (static_cast<size_t>(count) > reply.size()) continue;
-        reply.resize(static_cast<size_t>(count));
-        if (!valid_response(query, reply)) continue;
-        if (read16(reply, 2) & 0x0200) {
-            auto full = tcp_query(query, address, deadline);
-            if (full) reply = std::move(*full);
-            else reply = fit_response(query, reply, 0);
-        }
-        write16(reply, 0, read16(original.wire, 0));
+    auto start = Clock::now();
+    auto deadline = start + std::chrono::milliseconds(timeout_ms);
+    auto finish = [&](std::optional<Bytes> reply) {
+        if (timed_out) *timed_out = Clock::now() >= deadline;
+        if (reply) write16(*reply, 0, read16(original.wire, 0));
         return reply;
+    };
+    if (transport == UpstreamTransport::tcp) return finish(tcp_query(query, address, deadline));
+    // In auto mode reserve time for TCP even when UDP is silently filtered.
+    auto udp_deadline = transport == UpstreamTransport::automatic
+        ? start + std::chrono::milliseconds(std::min(300, std::max(1, timeout_ms / 2))) : deadline;
+    Fd fd(socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0));
+    if (fd >= 0 && !connect(fd, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) &&
+        send(fd, query.wire.data(), query.wire.size(), MSG_NOSIGNAL) == static_cast<ssize_t>(query.wire.size())) {
+        while (wait_fd(fd, POLLIN, udp_deadline)) {
+            Bytes reply(65535);
+            ssize_t count = recv(fd, reply.data(), reply.size(), MSG_TRUNC);
+            if (count < 0) {
+                if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) continue;
+                break;
+            }
+            if (static_cast<size_t>(count) > reply.size()) continue;
+            reply.resize(static_cast<size_t>(count));
+            if (!valid_response(query, reply)) continue;
+            if (read16(reply, 2) & 0x0200) {
+                // TC always requires TCP, including explicit UDP-first mode.
+                auto full = tcp_query(query, address, deadline);
+                if (full) reply = std::move(*full);
+                else reply = fit_response(query, reply, 0);
+            }
+            return finish(std::move(reply));
+        }
     }
-    return std::nullopt;
+    if (transport == UpstreamTransport::automatic) return finish(tcp_query(query, address, deadline));
+    return finish(std::nullopt);
 }
 } // namespace net_accel

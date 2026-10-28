@@ -1,0 +1,19 @@
+[Unit]
+Description=Validate local DNS settings and prepare TCP fallback
+Before=net-accel-dns.service net-accel-dns-tcp.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/dnsctl prepare
+StateDirectory=net-accel-dns
+StateDirectoryMode=0700
+RuntimeDirectory=net-accel-dns
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+UMask=0077
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK

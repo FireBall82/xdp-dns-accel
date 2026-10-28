@@ -174,9 +174,19 @@ bool age_response(Bytes& response, uint32_t seconds) {
     }
     return true;
 }
-void restore_question(const Query& query, Bytes& response) {
+bool restore_question(const Query& query, Bytes& response) {
+    if (response.size() < 12) return false;
     write16(response, 0, read16(query.wire, 0));
+    Question parsed;
+    if (!question(response, parsed) || parsed.end != query.question.end || parsed.name != query.question.name ||
+        parsed.type != query.question.type || parsed.klass != query.question.klass) return false;
+    // Expanded names cannot replace compressed wire names in place: they can
+    // overwrite QTYPE/QCLASS, following records, or the end of the packet.
+    // Keep the upstream encoding intact when restoring case is not safe.
+    if (query.question.wire_name.size() + 16 != query.question.end ||
+        parsed.wire_name.size() + 16 != parsed.end) return false;
     std::copy(query.question.wire_name.begin(), query.question.wire_name.end(), response.begin() + 12);
+    return true;
 }
 Bytes error_response(const Query& query, uint16_t rcode) {
     return response_header(query, 0x8080 | (read16(query.wire, 2) & 0x7910) | (rcode & 15));
